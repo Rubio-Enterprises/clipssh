@@ -6,7 +6,7 @@
 set -e
 
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
-REPO_URL="https://raw.githubusercontent.com/samuellawrentz/clipssh/main/clipssh"
+REPO_URL="https://raw.githubusercontent.com/strubio-ray/clipssh/main/clipssh"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -70,7 +70,9 @@ fi
 info "Installed to $INSTALL_DIR/clipssh"
 echo ""
 echo "Usage:"
-echo "  clipssh user@host    # upload screenshot to remote"
+echo "  clipssh user@host                  # upload screenshot to remote"
+echo "  clipssh config set host user@host  # save default host"
 echo ""
-echo "Set default host:"
-echo "  export CLIPSSH_HOST=user@host"
+echo "Configure:"
+echo "  clipssh config set host user@host"
+echo "  clipssh config list"

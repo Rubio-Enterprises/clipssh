@@ -30,15 +30,34 @@ clipssh user@myserver
 # The image will auto-attach
 ```
 
-## Set Default Host
+## Configuration
+
+Configure defaults with `clipssh config`:
 
 ```bash
-# Add to ~/.zshrc or ~/.bashrc
-export CLIPSSH_HOST=user@myserver
+# Set default host
+clipssh config set host user@myserver
+
+# Set custom remote directory (default: /tmp)
+clipssh config set remote_dir ~/.vibetunnel/control/uploads
 
 # Now just run:
 clipssh
+
+# View current settings
+clipssh config list
 ```
+
+Settings are stored in `~/.config/clipssh/config`.
+
+Environment variables override the config file for per-session use:
+
+```bash
+CLIPSSH_HOST=other@host clipssh
+CLIPSSH_REMOTE_DIR=/custom/path clipssh
+```
+
+**Precedence:** CLI arguments > environment variables > config file > defaults.
 
 ## Requirements
 
@@ -53,7 +72,7 @@ clipssh
 ## How It Works
 
 1. Extracts PNG image from your local clipboard
-2. Uploads to `/tmp/clipboard-<timestamp>.png` on remote host via SSH
+2. Uploads to `<remote-dir>/clipboard-<timestamp>.png` on remote host via SSH (default: `/tmp`)
 3. Copies the remote path to your clipboard
 4. You paste the path into Claude Code, which reads and displays the image
 

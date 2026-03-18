@@ -13,24 +13,39 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 NC='\033[0m' # No Color
 
+# Config file (XDG-compliant)
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/clipssh"
+CONFIG_FILE="$CONFIG_DIR/config"
+
 usage() {
     echo "Usage: clipssh [user@host] [options]"
+    echo "       clipssh config [set|get|list]"
     echo ""
     echo "Send clipboard screenshot to remote SSH host and copy path to clipboard."
     echo ""
     echo "Arguments:"
-    echo "  user@host    Remote host (default: \$CLIPSSH_HOST)"
+    echo "  user@host                   Remote host"
+    echo ""
+    echo "Commands:"
+    echo "  config set <key> <value>    Set a config value"
+    echo "  config get <key>            Get a config value"
+    echo "  config list                 Show all settings with sources"
     echo ""
     echo "Options:"
-    echo "  -h, --help     Show this help"
-    echo "  -v, --version  Show version"
+    echo "  -h, --help                  Show this help"
+    echo "  -v, --version               Show version"
     echo ""
-    echo "Environment:"
-    echo "  CLIPSSH_HOST   Default remote host"
+    echo "Environment (overrides config file):"
+    echo "  CLIPSSH_HOST                Remote host"
+    echo "  CLIPSSH_REMOTE_DIR          Remote directory for uploads"
+    echo ""
+    echo "Config keys: host, remote_dir"
+    echo "Config file: $CONFIG_FILE"
     echo ""
     echo "Example:"
-    echo "  clipssh user@myserver"
-    echo "  CLIPSSH_HOST=user@server clipssh"
+    echo "  clipssh config set host user@myserver"
+    echo "  clipssh config set remote_dir ~/.vibetunnel/control/uploads"
+    echo "  clipssh"
 }
 
 error() {
@@ -42,7 +57,74 @@ success() {
     echo -e "${GREEN}$1${NC}"
 }
 
+config_get() {
+    local key="$1"
+    if [[ -f "$CONFIG_FILE" ]]; then
+        grep "^${key}=" "$CONFIG_FILE" 2>/dev/null | tail -1 | cut -d= -f2-
+    fi
+}
+
+config_set() {
+    local key="$1" value="$2"
+    mkdir -p "$CONFIG_DIR"
+    if [[ -f "$CONFIG_FILE" ]] && grep -q "^${key}=" "$CONFIG_FILE" 2>/dev/null; then
+        local tmp="${CONFIG_FILE}.tmp"
+        sed "s|^${key}=.*|${key}=${value}|" "$CONFIG_FILE" > "$tmp" && mv "$tmp" "$CONFIG_FILE"
+    else
+        echo "${key}=${value}" >> "$CONFIG_FILE"
+    fi
+}
+
+config_list() {
+    echo "Config file: $CONFIG_FILE"
+    echo ""
+    for key in host remote_dir; do
+        local file_val env_var default effective source
+        file_val=$(config_get "$key")
+        case "$key" in
+            host)       env_var="${CLIPSSH_HOST:-}"; default="" ;;
+            remote_dir) env_var="${CLIPSSH_REMOTE_DIR:-}"; default="/tmp" ;;
+        esac
+        if [[ -n "$env_var" ]]; then
+            effective="$env_var"; source="env"
+        elif [[ -n "$file_val" ]]; then
+            effective="$file_val"; source="config"
+        elif [[ -n "$default" ]]; then
+            effective="$default"; source="default"
+        else
+            effective="(not set)"; source=""
+        fi
+        printf "  %-12s = %s" "$key" "$effective"
+        [[ -n "$source" ]] && printf "  (%s)" "$source"
+        echo ""
+    done
+}
+
 # Parse arguments
+case "${1:-}" in
+    config)
+        shift
+        case "${1:-}" in
+            set)
+                [[ -z "${2:-}" || -z "${3:-}" ]] && error "Usage: clipssh config set <key> <value>"
+                config_set "$2" "$3"
+                success "Set $2 = $3"
+                ;;
+            get)
+                [[ -z "${2:-}" ]] && error "Usage: clipssh config get <key>"
+                config_get "$2"
+                ;;
+            list|"")
+                config_list
+                ;;
+            *)
+                error "Unknown config command: $1. Use: set, get, list"
+                ;;
+        esac
+        exit 0
+        ;;
+esac
+
 while [[ $# -gt 0 ]]; do
     case $1 in
         -h|--help)
@@ -63,10 +145,10 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Determine host
-HOST="${HOST:-$CLIPSSH_HOST}"
+# Determine host (CLI arg > env var > config file)
+HOST="${HOST:-${CLIPSSH_HOST:-$(config_get host)}}"
 if [[ -z "$HOST" ]]; then
-    error "No host specified. Use: clipssh user@host or set CLIPSSH_HOST"
+    error "No host specified. Use: clipssh user@host or run: clipssh config set host user@host"
 fi
 
 # Check OS and clipboard tool
@@ -107,11 +189,13 @@ if [[ ! -s "$TEMP_FILE" ]]; then
     error "Clipboard image is empty"
 fi
 
-# Generate remote path
-REMOTE_PATH="/tmp/clipboard-$(date +%s).png"
+# Generate remote path (env var > config file > default)
+REMOTE_DIR="${CLIPSSH_REMOTE_DIR:-$(config_get remote_dir)}"
+REMOTE_DIR="${REMOTE_DIR:-/tmp}"
+REMOTE_PATH="${REMOTE_DIR}/clipboard-$(date +%s).png"
 
 # Upload via SSH
-if ! cat "$TEMP_FILE" | ssh "$HOST" "cat > $REMOTE_PATH" 2>/dev/null; then
+if ! cat "$TEMP_FILE" | ssh "$HOST" "mkdir -p '$REMOTE_DIR' && cat > '$REMOTE_PATH'" 2>/dev/null; then
     error "Failed to upload to $HOST"
 fi
 
