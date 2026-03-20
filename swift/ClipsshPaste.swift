@@ -20,8 +20,8 @@ if CommandLine.arguments.contains("--help") || CommandLine.arguments.contains("-
     Extract image from macOS clipboard and write PNG data to stdout.
 
     Detection order:
-      1. Raw image data (screenshot to clipboard)
-      2. File reference (Finder right-click → Copy)
+      1. File reference (Finder right-click → Copy)
+      2. Raw image data (screenshot to clipboard)
       3. Text file path (Finder right-click → Copy Path)
 
     Output:
@@ -84,7 +84,28 @@ func fileToStdoutPNG(path: String, sourcePrefix: String) -> Never {
     writePNGToStdout(pngData, source: "\(sourcePrefix)\(path)")
 }
 
-// --- Detection 1: Raw image data ---
+// --- Detection 1: File references ---
+func tryFileReference() {
+    // Prefer modern public.file-url, fall back to legacy NSFilenamesPboardType
+    // Checked before raw image data because Finder Copy puts both a file reference
+    // AND the file's icon as image data on the clipboard — we want the actual file.
+    if let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: nil) as? [URL],
+       let fileURL = urls.first {
+        let resolved = fileURL.resolvingSymlinksInPath()
+        let resolvedPath = resolved.path
+        let ext = resolved.pathExtension
+
+        guard isImageExtension(ext) else {
+            exitWithError("Copied file is not a supported image type: \(resolvedPath)", code: 2)
+        }
+
+        fileToStdoutPNG(path: resolvedPath, sourcePrefix: "source:file:")
+    }
+}
+
+tryFileReference()
+
+// --- Detection 2: Raw image data ---
 func tryRawImageData() {
     // Check for PNG data first, then TIFF (macOS screenshots are often TIFF internally)
     let imageTypes: [NSPasteboard.PasteboardType] = [
@@ -107,25 +128,6 @@ func tryRawImageData() {
 }
 
 tryRawImageData()
-
-// --- Detection 2: File references ---
-func tryFileReference() {
-    // Prefer modern public.file-url, fall back to legacy NSFilenamesPboardType
-    if let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: nil) as? [URL],
-       let fileURL = urls.first {
-        let resolved = fileURL.resolvingSymlinksInPath()
-        let resolvedPath = resolved.path
-        let ext = resolved.pathExtension
-
-        guard isImageExtension(ext) else {
-            exitWithError("Copied file is not a supported image type: \(resolvedPath)", code: 2)
-        }
-
-        fileToStdoutPNG(path: resolvedPath, sourcePrefix: "source:file:")
-    }
-}
-
-tryFileReference()
 
 // --- Detection 3: Text file path ---
 func tryTextPath() {
