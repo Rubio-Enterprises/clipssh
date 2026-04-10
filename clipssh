@@ -74,6 +74,45 @@ success() {
     notify "clipssh" "$1"
 }
 
+# Preflight check: verify Screen Recording permission is actually granted.
+# Runs once per user; writes a marker file on first success to skip subsequent runs.
+#
+# Why: when screencapture is invoked via a chain like skhd → bash → screencapture,
+# macOS TCC attribution is version-dependent and sometimes fails silently — the
+# capture produces a blank/black PNG without showing a permission prompt. This
+# preflight catches that case and gives the user actionable instructions.
+PREFLIGHT_MARKER="$CONFIG_DIR/.preflight-ok"
+
+preflight_screen_recording() {
+    # Skip if we've already validated on this machine
+    [[ -f "$PREFLIGHT_MARKER" ]] && return 0
+
+    local probe
+    probe=$(mktemp -t clipssh-preflight).png
+    /usr/sbin/screencapture -x -t png "$probe" 2>/dev/null || true
+
+    # A legitimate screenshot is larger than ~5KB even for a tiny screen.
+    # A blank/black or zero-byte capture is the signature of a silent TCC denial.
+    if [[ ! -s "$probe" ]] || [[ $(stat -f%z "$probe" 2>/dev/null || echo 0) -lt 5000 ]]; then
+        rm -f "$probe"
+        error "Screen Recording permission is required for --capture.
+
+Grant it manually:
+  1. Open System Settings → Privacy & Security → Screen & System Audio Recording
+  2. Click the + button
+  3. Press Cmd+Shift+G in the file picker
+  4. Type: /usr/sbin/screencapture
+  5. Press Enter, then click Add
+  6. You may also need to add: $SHELL
+
+Then re-run: clipssh --capture"
+    fi
+
+    rm -f "$probe"
+    mkdir -p "$CONFIG_DIR"
+    touch "$PREFLIGHT_MARKER"
+}
+
 config_get() {
     local key="$1"
     if [[ -f "$CONFIG_FILE" ]]; then
@@ -206,6 +245,9 @@ if [[ "${CAPTURE_MODE:-0}" == "1" ]]; then
     if ! command -v screencapture &> /dev/null; then
         error "screencapture not found (this should never happen on macOS)"
     fi
+
+    # Verify Screen Recording permission is actually granted (first run only)
+    preflight_screen_recording
 
     # screencapture -i returns 0 on both successful capture AND user cancel (Esc).
     # A non-zero exit indicates a genuine error (disk full, permission denied, etc.)
