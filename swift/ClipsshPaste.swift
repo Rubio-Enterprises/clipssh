@@ -32,7 +32,8 @@ if CommandLine.arguments.contains("--help") || CommandLine.arguments.contains("-
 
     Exit codes:
       0  Success
-      1  No usable image found
+      1  Error (read mode: no usable image found; write mode: file unreadable,
+         not a valid image, or pasteboard write failed)
       2  File found but not a supported image type
 
     Options:
@@ -80,8 +81,12 @@ if let putFileIdx = CommandLine.arguments.firstIndex(of: "--put-file") {
     let pb = NSPasteboard.general
     pb.clearContents()
     pb.declareTypes([.png, .tiff], owner: nil)
-    pb.setData(data, forType: .png)
-    pb.setData(tiffData, forType: .tiff)
+    guard pb.setData(data, forType: .png) else {
+        exitWithError("Failed to write PNG data to pasteboard")
+    }
+    guard pb.setData(tiffData, forType: .tiff) else {
+        exitWithError("Failed to write TIFF data to pasteboard")
+    }
 
     exit(0)
 }
