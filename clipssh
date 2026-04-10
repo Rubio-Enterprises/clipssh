@@ -284,6 +284,15 @@ REMOTE_PATH=$(ssh "$HOST" "
 " < "$TEMP_FILE" 2>/dev/null) || true
 
 if [[ -z "$REMOTE_PATH" ]]; then
+    # In --capture mode, the captured PNG is only on disk — the clipboard still
+    # holds whatever it held before. Restore the capture to the clipboard so the
+    # bare-clipssh hotkey becomes a natural retry path.
+    if [[ "${CAPTURE_MODE:-0}" == "1" && "$OSTYPE" == "darwin"* ]]; then
+        if command -v clipssh-paste &> /dev/null; then
+            clipssh-paste --put-file "$TEMP_FILE" 2>/dev/null || true
+        fi
+        error "Failed to upload to $HOST — image copied to clipboard for retry"
+    fi
     error "Failed to upload to $HOST"
 fi
 
