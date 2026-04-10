@@ -48,13 +48,28 @@ usage() {
     echo "  clipssh"
 }
 
+# Emit a native macOS notification. No-op on Linux.
+# Uses osascript with the message passed via environment variable to avoid
+# AppleScript string-escaping issues with paths containing quotes/backslashes.
+notify() {
+    local title="$1" message="$2"
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        CLIPSSH_NOTIFY_MSG="$message" CLIPSSH_NOTIFY_TITLE="$title" \
+            osascript \
+                -e 'display notification (system attribute "CLIPSSH_NOTIFY_MSG") with title (system attribute "CLIPSSH_NOTIFY_TITLE")' \
+                >/dev/null 2>&1 || true
+    fi
+}
+
 error() {
     echo -e "${RED}Error:${NC} $1" >&2
+    notify "clipssh" "$1"
     exit 1
 }
 
 success() {
     echo -e "${GREEN}$1${NC}"
+    notify "clipssh" "$1"
 }
 
 config_get() {
