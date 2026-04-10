@@ -288,10 +288,17 @@ if [[ -z "$REMOTE_PATH" ]]; then
     # holds whatever it held before. Restore the capture to the clipboard so the
     # bare-clipssh hotkey becomes a natural retry path.
     if [[ "${CAPTURE_MODE:-0}" == "1" && "$OSTYPE" == "darwin"* ]]; then
+        # Try to restore the captured PNG to the clipboard. If that succeeds, the
+        # bare-clipssh hotkey serves as the retry path; if it fails for any reason,
+        # fall through to the plain error message so we don't lie about the state.
+        PUT_OK=1
         if command -v clipssh-paste &> /dev/null; then
-            clipssh-paste --put-file "$TEMP_FILE" 2>/dev/null || true
+            clipssh-paste --put-file "$TEMP_FILE" 2>/dev/null && PUT_OK=0 || PUT_OK=$?
         fi
-        error "Failed to upload to $HOST — image copied to clipboard for retry"
+        if [[ "$PUT_OK" -eq 0 ]]; then
+            error "Failed to upload to $HOST — image copied to clipboard for retry"
+        fi
+        # Fall through to the generic error below
     fi
     error "Failed to upload to $HOST"
 fi
