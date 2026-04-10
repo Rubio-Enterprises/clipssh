@@ -34,6 +34,8 @@ usage() {
     echo "Options:"
     echo "  -h, --help                  Show this help"
     echo "  -v, --version               Show version"
+    echo "      --capture               (macOS only) Interactively capture a screen region,"
+    echo "                              then upload it. Cancel with Esc."
     echo ""
     echo "Environment (overrides config file):"
     echo "  CLIPSSH_HOST                Remote host"
@@ -150,6 +152,10 @@ while [[ $# -gt 0 ]]; do
             echo "clipssh $VERSION"
             exit 0
             ;;
+        --capture)
+            CAPTURE_MODE=1
+            shift
+            ;;
         -*)
             error "Unknown option: $1"
             ;;
@@ -159,6 +165,11 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# --capture is macOS-only
+if [[ "${CAPTURE_MODE:-0}" == "1" && "$OSTYPE" != "darwin"* ]]; then
+    error "--capture is not supported on Linux (requires macOS screencapture)"
+fi
 
 # Determine host (CLI arg > env var > config file)
 HOST="${HOST:-${CLIPSSH_HOST:-$(config_get host)}}"
