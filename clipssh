@@ -207,9 +207,16 @@ if [[ "${CAPTURE_MODE:-0}" == "1" ]]; then
         error "screencapture not found (this should never happen on macOS)"
     fi
 
-    # screencapture returns 0 whether the user selects a region or cancels with Esc;
-    # the only reliable cancel signal is "did we actually get a non-empty file?"
-    /usr/sbin/screencapture -i "$TEMP_FILE" 2>/dev/null || true
+    # screencapture -i returns 0 on both successful capture AND user cancel (Esc).
+    # A non-zero exit indicates a genuine error (disk full, permission denied, etc.)
+    # that we should surface explicitly. Cancel is distinguished below by whether
+    # the tempfile ended up non-empty.
+    SCREENCAP_STATUS=0
+    /usr/sbin/screencapture -i "$TEMP_FILE" 2>/dev/null || SCREENCAP_STATUS=$?
+
+    if [[ $SCREENCAP_STATUS -ne 0 ]]; then
+        error "screencapture failed (exit $SCREENCAP_STATUS)"
+    fi
 
     if [[ ! -s "$TEMP_FILE" ]]; then
         # User cancelled (Esc or clicked away). Exit silently with code 2,
