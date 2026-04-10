@@ -63,16 +63,25 @@ if let putFileIdx = CommandLine.arguments.firstIndex(of: "--put-file") {
     guard let data = try? Data(contentsOf: url) else {
         exitWithError("Failed to read file: \(path)")
     }
-    guard let image = NSImage(data: data) else {
+
+    // Decode to validate the file is a real image (reject truncated/corrupt PNGs
+    // and non-image files before touching the pasteboard) and to produce the
+    // TIFF representation the pasteboard also requires.
+    guard let bitmapRep = NSBitmapImageRep(data: data) else {
         exitWithError("Failed to decode image from file: \(path)")
     }
+    guard let tiffData = bitmapRep.representation(using: .tiff, properties: [:]) else {
+        exitWithError("Failed to convert image to TIFF")
+    }
 
+    // Write both PNG and TIFF representations so consumers can pick whichever
+    // they prefer. The PNG bytes are written as-is (the file on disk is already
+    // a valid PNG from screencapture).
     let pb = NSPasteboard.general
     pb.clearContents()
-    let ok = pb.writeObjects([image])
-    guard ok else {
-        exitWithError("Failed to write image to pasteboard")
-    }
+    pb.declareTypes([.png, .tiff], owner: nil)
+    pb.setData(data, forType: .png)
+    pb.setData(tiffData, forType: .tiff)
 
     exit(0)
 }
