@@ -15,11 +15,13 @@ func exitWithError(_ message: String, code: Int32 = 1) -> Never {
 // Argument parsing
 if CommandLine.arguments.contains("--help") || CommandLine.arguments.contains("-h") {
     print("""
-    Usage: clipssh-paste
+    Usage: clipssh-paste              (read mode)
+           clipssh-paste --put-file <path>  (write mode)
 
-    Extract image from macOS clipboard and write PNG data to stdout.
+    Read mode: Extract image from macOS clipboard and write PNG data to stdout.
+    Write mode: Read a PNG file from disk and place it on the clipboard as image data.
 
-    Detection order:
+    Detection order (read mode only):
       1. File reference (Finder right-click → Copy)
       2. Raw image data (screenshot to clipboard)
       3. Text file path (Finder right-click → Copy Path)
@@ -42,6 +44,36 @@ if CommandLine.arguments.contains("--help") || CommandLine.arguments.contains("-
 
 if CommandLine.arguments.contains("--version") || CommandLine.arguments.contains("-v") {
     print("clipssh-paste \(version)")
+    exit(0)
+}
+
+// --- Mode: --put-file <path> ---
+// Write a PNG file from disk onto the pasteboard as image data.
+// Used by `clipssh --capture` on upload failure to restore the retry contract:
+// the captured PNG is placed back on the clipboard so the bare-clipssh hotkey
+// can re-attempt the upload without re-capturing.
+if let putFileIdx = CommandLine.arguments.firstIndex(of: "--put-file") {
+    let pathArgIdx = CommandLine.arguments.index(after: putFileIdx)
+    guard pathArgIdx < CommandLine.arguments.endIndex else {
+        exitWithError("--put-file requires a path argument")
+    }
+    let path = CommandLine.arguments[pathArgIdx]
+
+    let url = URL(fileURLWithPath: path)
+    guard let data = try? Data(contentsOf: url) else {
+        exitWithError("Failed to read file: \(path)")
+    }
+    guard let image = NSImage(data: data) else {
+        exitWithError("Failed to decode image from file: \(path)")
+    }
+
+    let pb = NSPasteboard.general
+    pb.clearContents()
+    let ok = pb.writeObjects([image])
+    guard ok else {
+        exitWithError("Failed to write image to pasteboard")
+    }
+
     exit(0)
 }
 
