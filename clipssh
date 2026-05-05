@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # clipssh - Send clipboard screenshot to remote SSH host
-# https://github.com/strubio-ray/clipssh
+# https://github.com/Rubio-Enterprises/clipssh
 #
 
 set -e
@@ -226,7 +226,7 @@ fi
 # Check OS and clipboard tool
 if [[ "$OSTYPE" == "darwin"* ]]; then
     if ! command -v clipssh-paste &> /dev/null; then
-        error "clipssh-paste not found. Install with: brew install strubio-ray/tap/clipssh"
+        error "clipssh-paste not found. Install with: brew install rubio-enterprises/tap/clipssh"
     fi
 elif [[ "$OSTYPE" == "linux"* ]]; then
     if command -v xclip &> /dev/null; then

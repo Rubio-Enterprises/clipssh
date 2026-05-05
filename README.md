@@ -14,7 +14,7 @@ When using Claude Code (or similar tools) over SSH, you can't paste images from 
 
 ```bash
 # macOS via Homebrew
-brew install strubio-ray/tap/clipssh
+brew install rubio-enterprises/tap/clipssh
 ```
 
 ## Usage
@@ -184,7 +184,7 @@ skhd --start-service        # ensure the launchd agent is running
 
 **macOS:**
 - SSH access to remote host
-- `clipssh-paste` (bundled with `brew install strubio-ray/tap/clipssh`)
+- `clipssh-paste` (bundled with `brew install rubio-enterprises/tap/clipssh`)
 
 **Linux:**
 - `xclip` (X11) or `wl-clipboard` (Wayland)
