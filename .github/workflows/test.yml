@@ -6,42 +6,19 @@ on:
   pull_request:
   workflow_dispatch:
 
+# CI runs the same Make targets a developer would run after `make setup`, so
+# reproducing a CI failure locally is just `make setup && make check`.
+
 jobs:
   shell:
     name: Shell tests (bats + shellcheck + kcov)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install bats, shellcheck, kcov build deps
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            bats bats-assert bats-file bats-support \
-            shellcheck \
-            cmake binutils-dev zlib1g-dev libdw-dev g++
-
-      - name: Build kcov from source
-        # kcov isn't packaged on Ubuntu 24.04; build the latest release.
-        run: |
-          curl -fsSL https://github.com/SimonKagstrom/kcov/archive/v42.tar.gz | tar xz -C /tmp
-          cd /tmp/kcov-42
-          cmake -B build > /dev/null
-          make -C build -j"$(nproc)" > /dev/null
-          sudo make -C build install > /dev/null
-
-      - name: Lint
-        run: make lint
-
-      - name: Run tests with coverage
-        run: make test-coverage
-
-      - name: Enforce coverage floor (80%)
-        run: |
-          pct=$(jq -r '.files[] | select(.file|endswith("/clipssh")).percent_covered' coverage/bats/coverage.json)
-          echo "clipssh coverage: $pct%"
-          awk "BEGIN{exit !($pct >= 80)}"
-
+      - name: Install dependencies
+        run: make setup
+      - name: Lint + tests + coverage floor
+        run: make check
       - name: Upload coverage HTML report
         if: always()
         uses: actions/upload-artifact@v4

@@ -27,9 +27,18 @@ entry point. See the `BASH_SOURCE` guard at the bottom of `clipssh`.
 
 ## Running
 
+CI and local share the same Make targets. Reproducing a CI failure locally is:
+
 ```
-make test            # bats only (shell tests)
-make test-coverage   # bats + kcov; prints per-file coverage
+make setup     # one-time: installs bats, shellcheck, jq, kcov (Linux + macOS)
+make check     # what CI runs: lint + tests + coverage floor
+```
+
+Day-to-day during development:
+
+```
+make test            # bats only (fast feedback)
+make test-coverage   # bats + kcov, prints per-file coverage
 make lint            # shellcheck
 make test-swift      # Swift XCTests (requires macOS / Xcode)
 ```
@@ -37,10 +46,10 @@ make test-swift      # Swift XCTests (requires macOS / Xcode)
 ## Coverage
 
 Coverage is measured with [kcov](https://github.com/SimonKagstrom/kcov) against
-the `clipssh` script. The CI workflow enforces a floor of 80%; the suite
-currently covers ≥97%. The handful of "uncovered" lines are continuation lines
-of a single multi-line ssh heredoc — they execute in tests but kcov accounts
-for them per physical line.
+the `clipssh` script. The `check-coverage` target enforces a floor of
+`COVERAGE_FLOOR` (default 80%); the suite currently covers ≥97%. The handful
+of "uncovered" lines are continuation lines of a single multi-line ssh
+heredoc — they execute in tests but kcov accounts for them per physical line.
 
 ## Swift
 

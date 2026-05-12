@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+#
+# script/bootstrap — install test-suite dependencies.
+#
+# Idempotent: skips anything that's already installed. Used identically by
+# CI (`make setup`) and developers running the test suite locally for the
+# first time.
+#
+# Installs: bats + bats-assert/file/support, shellcheck, jq, kcov.
+# (Swift tests use `swift test`; swift comes from Xcode on macOS.)
+
+set -euo pipefail
+
+log() { printf '\033[0;32m==>\033[0m %s\n' "$*"; }
+have() { command -v "$1" >/dev/null 2>&1; }
+
+install_linux() {
+    log "Installing apt packages"
+    sudo apt-get update -qq
+    sudo apt-get install -y --no-install-recommends \
+        bats bats-assert bats-file bats-support \
+        shellcheck \
+        jq
+
+    if ! have kcov; then
+        log "Building kcov from source (not packaged on Ubuntu 24.04)"
+        sudo apt-get install -y --no-install-recommends \
+            cmake binutils-dev zlib1g-dev libdw-dev g++ ca-certificates curl
+        local tmp
+        tmp=$(mktemp -d)
+        trap 'rm -rf "$tmp"' RETURN
+        curl -fsSL https://github.com/SimonKagstrom/kcov/archive/v42.tar.gz \
+            | tar xz -C "$tmp"
+        cmake -S "$tmp/kcov-42" -B "$tmp/kcov-42/build" > /dev/null
+        make -C "$tmp/kcov-42/build" -j"$(nproc)" > /dev/null
+        sudo make -C "$tmp/kcov-42/build" install > /dev/null
+    fi
+}
+
+install_macos() {
+    if ! have brew; then
+        echo "Homebrew is required. Install from https://brew.sh." >&2
+        exit 1
+    fi
+    log "Installing Homebrew packages"
+    # bats-core ships the test runner; the assertion libs are separate taps.
+    brew install --quiet \
+        bats-core \
+        bats-assert \
+        bats-file \
+        bats-support \
+        shellcheck \
+        jq \
+        kcov
+}
+
+case "$(uname -s)" in
+    Linux)  install_linux ;;
+    Darwin) install_macos ;;
+    *)
+        echo "Unsupported OS: $(uname -s)" >&2
+        exit 1
+        ;;
+esac
+
+log "Done. Installed:"
+for tool in bats shellcheck jq kcov; do
+    if have "$tool"; then
+        printf "  %-12s %s\n" "$tool" "$("$tool" --version 2>&1 | head -1)"
+    else
+        printf "  %-12s (missing)\n" "$tool"
+    fi
+done
