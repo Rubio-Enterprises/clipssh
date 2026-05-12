@@ -1,18 +1,17 @@
 #!/usr/bin/env bash
 #
-# script/bootstrap — install test-suite dependencies.
-#
-# Idempotent: skips anything that's already installed. Used identically by
-# CI (`make setup`) and developers running the test suite locally for the
-# first time.
-#
-# Installs: bats + bats-assert/file/support, shellcheck, jq, kcov.
-# (Swift tests use `swift test`; swift comes from Xcode on macOS.)
+# Installs bats + bats-assert/file/support, shellcheck, jq, kcov.
+# Idempotent; invoked by `make setup` from both CI and local dev.
 
 set -euo pipefail
 
 log() { printf '\033[0;32m==>\033[0m %s\n' "$*"; }
 have() { command -v "$1" >/dev/null 2>&1; }
+
+if have bats && have shellcheck && have jq && have kcov; then
+    log "All dependencies already installed"
+    exit 0
+fi
 
 install_linux() {
     log "Installing apt packages"
@@ -28,7 +27,8 @@ install_linux() {
             cmake binutils-dev zlib1g-dev libdw-dev g++ ca-certificates curl
         local tmp
         tmp=$(mktemp -d)
-        trap 'rm -rf "$tmp"' RETURN
+        # EXIT (not RETURN) so cleanup runs even if a build step aborts under set -e.
+        trap 'rm -rf "$tmp"' EXIT
         curl -fsSL https://github.com/SimonKagstrom/kcov/archive/v42.tar.gz \
             | tar xz -C "$tmp"
         cmake -S "$tmp/kcov-42" -B "$tmp/kcov-42/build" > /dev/null
@@ -43,7 +43,6 @@ install_macos() {
         exit 1
     fi
     log "Installing Homebrew packages"
-    # bats-core ships the test runner; the assertion libs are separate taps.
     brew install --quiet \
         bats-core \
         bats-assert \

@@ -27,20 +27,12 @@ entry point. See the `BASH_SOURCE` guard at the bottom of `clipssh`.
 
 ## Running
 
-CI and local share the same Make targets. Reproducing a CI failure locally is:
-
-```
-make setup     # one-time: installs bats, shellcheck, jq, kcov (Linux + macOS)
-make check     # what CI runs: lint + tests + coverage floor
-```
-
-Day-to-day during development:
-
 ```
 make test            # bats only (fast feedback)
 make test-coverage   # bats + kcov, prints per-file coverage
 make lint            # shellcheck
 make test-swift      # Swift XCTests (requires macOS / Xcode)
+make check           # what CI runs: lint + tests + coverage floor
 ```
 
 ## Coverage

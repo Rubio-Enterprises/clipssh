@@ -1,9 +1,7 @@
 .PHONY: help setup test test-shell test-swift test-coverage check-coverage check lint clean
 
-# Minimum coverage percentage the shell test suite must hit. CI enforces this
-# via `make check-coverage`; running the same target locally produces an
-# identical pass/fail result.
 COVERAGE_FLOOR ?= 80
+COVERAGE_JSON  ?= coverage/bats/coverage.json
 
 help:
 	@echo "Targets:"
@@ -32,10 +30,10 @@ test-coverage:
 	@rm -rf coverage
 	@mkdir -p coverage
 	kcov --include-path=$(CURDIR)/clipssh coverage bats tests/unit tests/integration
-	@jq -r '.files[] | "\(.percent_covered)%  \(.file)"' coverage/bats/coverage.json
+	@jq -r '.files[] | "\(.percent_covered)%  \(.file)"' $(COVERAGE_JSON)
 
 check-coverage: test-coverage
-	@pct=$$(jq -r '.files[] | select(.file|endswith("/clipssh")).percent_covered' coverage/bats/coverage.json); \
+	@pct=$$(jq -r '.files[] | select(.file|endswith("/clipssh")).percent_covered' $(COVERAGE_JSON)); \
 	echo "clipssh coverage: $$pct% (floor: $(COVERAGE_FLOOR)%)"; \
 	awk "BEGIN{exit !($$pct >= $(COVERAGE_FLOOR))}"
 

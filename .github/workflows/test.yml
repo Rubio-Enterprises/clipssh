@@ -6,9 +6,6 @@ on:
   pull_request:
   workflow_dispatch:
 
-# CI runs the same Make targets a developer would run after `make setup`, so
-# reproducing a CI failure locally is just `make setup && make check`.
-
 jobs:
   shell:
     name: Shell tests (bats + shellcheck + kcov)

@@ -14,29 +14,23 @@ CLIPSSH_BIN="$PROJECT_ROOT/clipssh"
 # which lets tests deterministically reproduce "no clipboard tool installed".
 ISOLATED_PATH="/usr/bin:/bin"
 
-# Loads bats-support / bats-assert / bats-file from any of the install
-# locations the supported package managers use (apt on Ubuntu, Homebrew on
-# macOS), and falls back to bats's own BATS_LIB_PATH search via
-# bats_load_library when available.
+# Locate bats-support/assert/file across apt + Homebrew layouts.
 load_bats_libs() {
-    local lib prefix
-    local prefixes=(
-        /usr/lib/bats              # apt (Ubuntu/Debian)
-        /usr/local/lib             # Homebrew on Intel macOS / manual installs
-        /opt/homebrew/lib          # Homebrew on Apple silicon
-        "${BATS_LIB_PATH:-}"       # explicit user override
-    )
+    BATS_LIB_PATH="/usr/lib/bats:/usr/local/lib:/opt/homebrew/lib${BATS_LIB_PATH:+:$BATS_LIB_PATH}"
+    export BATS_LIB_PATH
+    local lib
     for lib in bats-support bats-assert bats-file; do
-        for prefix in "${prefixes[@]}"; do
-            [[ -z "$prefix" ]] && continue
-            if [[ -f "$prefix/$lib/load.bash" ]]; then
-                # shellcheck disable=SC1090
-                load "$prefix/$lib/load.bash"
-                continue 2
-            fi
-        done
         if declare -F bats_load_library >/dev/null; then
             bats_load_library "$lib" 2>/dev/null || true
+        else
+            local prefix
+            for prefix in ${BATS_LIB_PATH//:/ }; do
+                if [[ -f "$prefix/$lib/load.bash" ]]; then
+                    # shellcheck disable=SC1090
+                    load "$prefix/$lib/load.bash"
+                    break
+                fi
+            done
         fi
     done
 }
