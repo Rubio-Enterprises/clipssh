@@ -1,9 +1,7 @@
 #!/usr/bin/env bats
 #
-# Unit tests for extract_clipboard_image, which has separate code paths for
-# macOS (clipssh-paste with a parseable source line on stderr) and Linux
-# (PASTE_CMD pipe). These tests source the script so we can stub out the
-# tooling and inspect the resulting TEMP_FILE / SOURCE_LINE values.
+# Unit tests for extract_clipboard_image. macOS path drives clipssh-paste and
+# reads SOURCE_LINE off stderr; Linux path drives PASTE_CMD.
 
 bats_require_minimum_version 1.5.0
 load '../helpers/common'
@@ -26,7 +24,7 @@ teardown() {
     PASTE_CMD="xclip -selection clipboard -target image/png -o"
 
     extract_clipboard_image
-    [[ "$(cat "$TEMP_FILE")" == "png-bytes-from-linux" ]]
+    assert_equal "$(<"$TEMP_FILE")" "png-bytes-from-linux"
 }
 
 @test "extract_clipboard_image: linux errors when PASTE_CMD fails" {
@@ -55,8 +53,8 @@ EOF
 )"
     OSTYPE="darwin23"
     extract_clipboard_image
-    [[ "$(cat "$TEMP_FILE")" == "png-from-mac" ]]
-    [[ "$SOURCE_LINE" == "source:file:/Users/me/photo.png" ]]
+    assert_equal "$(<"$TEMP_FILE")" "png-from-mac"
+    assert_equal "$SOURCE_LINE" "source:file:/Users/me/photo.png"
 }
 
 @test "extract_clipboard_image: macOS uses only the last stderr line as the source" {
@@ -68,7 +66,7 @@ EOF
 )"
     OSTYPE="darwin23"
     extract_clipboard_image
-    [[ "$SOURCE_LINE" == "source:image" ]]
+    assert_equal "$SOURCE_LINE" "source:image"
 }
 
 @test "extract_clipboard_image: macOS propagates clipssh-paste's last stderr line as the error" {

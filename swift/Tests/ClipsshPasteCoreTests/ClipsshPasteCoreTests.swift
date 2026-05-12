@@ -108,27 +108,14 @@ final class ClipsshPasteCoreTests: XCTestCase {
     // MARK: - sourceMarker
 
     func testSourceMarker_fileIncludesPath() {
-        XCTAssertEqual(
-            ClipsshPasteCore.sourceMarker(origin: .file, payload: "/tmp/x.png"),
-            "source:file:/tmp/x.png"
-        )
+        XCTAssertEqual(ClipsshPasteCore.sourceMarker(.file("/tmp/x.png")), "source:file:/tmp/x.png")
     }
 
     func testSourceMarker_pathIncludesPath() {
-        XCTAssertEqual(
-            ClipsshPasteCore.sourceMarker(origin: .path, payload: "/tmp/y.png"),
-            "source:path:/tmp/y.png"
-        )
+        XCTAssertEqual(ClipsshPasteCore.sourceMarker(.path("/tmp/y.png")), "source:path:/tmp/y.png")
     }
 
-    func testSourceMarker_imageIgnoresPayload() {
-        XCTAssertEqual(
-            ClipsshPasteCore.sourceMarker(origin: .image, payload: "anything"),
-            "source:image"
-        )
-        XCTAssertEqual(
-            ClipsshPasteCore.sourceMarker(origin: .image, payload: ""),
-            "source:image"
-        )
+    func testSourceMarker_image() {
+        XCTAssertEqual(ClipsshPasteCore.sourceMarker(.image), "source:image")
     }
 }

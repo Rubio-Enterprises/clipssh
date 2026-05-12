@@ -6,13 +6,14 @@
 #   - XDG_CONFIG_HOME is redirected into $TEST_TMP so config writes are sandboxed.
 #   - $MOCK_BIN is a per-test PATH-prefix holding fake ssh / clipboard tools.
 
-# Resolve project root regardless of which test file pulled us in.
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROJECT_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
 CLIPSSH_BIN="$PROJECT_ROOT/clipssh"
-MOCKS_DIR="$TESTS_DIR/mocks"
 
-# Load bats-assert / bats-file / bats-support if available (apt-installed paths).
+# /usr/bin:/bin holds coreutils (rm, sed, grep) but neither xclip nor pbcopy,
+# which lets tests deterministically reproduce "no clipboard tool installed".
+ISOLATED_PATH="/usr/bin:/bin"
+
 load_bats_libs() {
     local lib
     for lib in /usr/lib/bats/bats-support/load.bash \
@@ -23,52 +24,53 @@ load_bats_libs() {
     done
 }
 
-# A minimal but functional PATH used by tests that need to strip out clipboard
-# tools without losing coreutils. /usr/bin and /bin are intentional — they hold
-# rm, sed, grep, etc. which the script under test relies on.
-ISOLATED_PATH="/usr/bin:/bin"
-
-# Standard per-test setup.
 common_setup() {
     load_bats_libs
 
     TEST_TMP="$(mktemp -d)"
     export TEST_TMP
 
-    # Sandbox config + home so tests never touch the developer's real files.
     export HOME="$TEST_TMP/home"
     mkdir -p "$HOME"
     export XDG_CONFIG_HOME="$TEST_TMP/xdg"
 
-    # Per-test mock bin directory at the front of PATH so fakes win over reals.
     MOCK_BIN="$TEST_TMP/bin"
     mkdir -p "$MOCK_BIN"
     export MOCK_BIN
     export PATH="$MOCK_BIN:$ISOLATED_PATH"
 
-    # Default to linux behavior; macOS-specific tests override OSTYPE.
     export OSTYPE="linux-gnu"
 
-    # Clear inheritable config so behavior is deterministic.
     unset CLIPSSH_HOST CLIPSSH_REMOTE_DIR
 }
 
 common_teardown() {
-    rm -rf "$TEST_TMP"
+    rm -rf "${TEST_TMP:?}"
 }
 
-# Install a fake executable in $MOCK_BIN. Body is run with the script's args.
+# Install a fake executable in $MOCK_BIN. Body is the script body (sans shebang).
 install_mock() {
-    local name="$1"
-    local body="$2"
+    local name="$1" body="$2"
     local path="$MOCK_BIN/$name"
     printf '#!/usr/bin/env bash\n%s\n' "$body" > "$path"
     chmod +x "$path"
 }
 
-# Source the clipssh script as a library (functions only, no main).
-# This works because the script guards `main "$@"` behind a BASH_SOURCE check.
+# Source the clipssh script so its functions are available in the test shell.
 source_clipssh() {
     # shellcheck disable=SC1090
     source "$CLIPSSH_BIN"
+}
+
+# Records the host arg, remote script, and stdin payload to $TEST_TMP/ssh.*,
+# then echoes the synthesized remote path the real script would produce.
+install_ssh_recorder() {
+    install_mock ssh "$(cat <<'EOF'
+echo "$1" > "$TEST_TMP/ssh.host"
+echo "$2" > "$TEST_TMP/ssh.script"
+cat > "$TEST_TMP/ssh.stdin"
+filename=$(printf '%s\n' "$2" | grep -oE 'PATH_FULL="\$DIR/[^"]+' | sed 's|.*\$DIR/||')
+echo "/tmp/$filename"
+EOF
+)"
 }

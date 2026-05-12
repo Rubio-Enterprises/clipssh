@@ -1,29 +1,20 @@
 import Foundation
 
-/// Pure (AppKit-free) helpers used by clipssh-paste.
-///
-/// These are extracted into their own module so they can be unit tested
-/// without spinning up an NSPasteboard. Anything that touches the
-/// pasteboard, the file system, or process exit lives in the executable
-/// target, not here.
+/// AppKit-free helpers; safe to import from any target.
 public enum ClipsshPasteCore {
 
-    /// File extensions clipssh-paste will accept as image inputs.
-    /// Lowercase canonical form; callers should compare against `lowercased()`.
+    /// File extensions accepted as image inputs. Lowercase canonical form.
     public static let supportedExtensions: Set<String> = [
         "png", "jpg", "jpeg", "gif", "tiff", "bmp", "webp",
     ]
 
-    /// Returns true when `ext` (case-insensitively) is in the supported set.
-    /// An empty extension is never considered an image.
     public static func isImageExtension(_ ext: String) -> Bool {
         guard !ext.isEmpty else { return false }
         return supportedExtensions.contains(ext.lowercased())
     }
 
     /// Strips a matching pair of surrounding single or double quotes.
-    /// Finder's "Copy as Pathname" wraps paths in single quotes; we accept
-    /// either flavor and leave unquoted strings alone.
+    /// Finder's "Copy as Pathname" wraps paths in single quotes.
     public static func stripSurroundingQuotes(_ s: String) -> String {
         guard s.count >= 2 else { return s }
         if (s.hasPrefix("'") && s.hasSuffix("'")) ||
@@ -33,17 +24,14 @@ public enum ClipsshPasteCore {
         return s
     }
 
-    /// Whether `s` looks like a single-line absolute or tilde-prefixed path.
-    /// Multi-line input is rejected — the clipboard may contain prose that
-    /// happens to begin with a slash.
+    /// Single-line strings starting with `/` or `~`. Multi-line input is
+    /// rejected so prose pasted from a document doesn't masquerade as a path.
     public static func looksLikePath(_ s: String) -> Bool {
         guard !s.contains("\n") else { return false }
         return s.hasPrefix("/") || s.hasPrefix("~")
     }
 
-    /// Normalizes a clipboard text candidate into a (potential) filesystem
-    /// path: trims whitespace, strips surrounding quotes, expands `~`.
-    /// Returns nil when the input clearly isn't a path.
+    /// Trim, unquote, and expand `~`. Returns nil for non-path input.
     public static func normalizeClipboardPath(_ raw: String) -> String? {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         let unquoted = stripSurroundingQuotes(trimmed)
@@ -51,23 +39,20 @@ public enum ClipsshPasteCore {
         return NSString(string: unquoted).expandingTildeInPath
     }
 
-    /// Builds the "source:..." marker clipssh-paste writes to stderr so the
-    /// caller can use the original filename for the remote upload.
-    /// Returns nil for unrecognized origins.
-    public static func sourceMarker(origin: SourceOrigin, payload: String) -> String {
-        switch origin {
-        case .file:  return "source:file:\(payload)"
-        case .path:  return "source:path:\(payload)"
-        case .image: return "source:image"
-        }
+    /// The "source:..." marker clipssh-paste writes to stderr so the bash
+    /// caller can derive the remote filename from the original source.
+    /// This contract is mirrored in `clipssh`'s `compute_remote_filename`.
+    public enum Source {
+        case file(String)
+        case path(String)
+        case image
     }
 
-    public enum SourceOrigin {
-        /// Pasteboard contained an NSURL pointing at a file.
-        case file
-        /// Pasteboard contained plain text resolved to a file path.
-        case path
-        /// Pasteboard contained raw image bytes.
-        case image
+    public static func sourceMarker(_ source: Source) -> String {
+        switch source {
+        case .file(let path):  return "source:file:\(path)"
+        case .path(let path):  return "source:path:\(path)"
+        case .image:           return "source:image"
+        }
     }
 }

@@ -98,7 +98,6 @@ config_list() {
     done
 }
 
-# Dispatches `clipssh config ...` subcommands. Expects args after `config`.
 handle_config_command() {
     case "${1:-}" in
         set)
@@ -119,7 +118,6 @@ handle_config_command() {
     esac
 }
 
-# Parses CLI args, setting global HOST. May exit early for -h / -v.
 parse_args() {
     while [[ $# -gt 0 ]]; do
         case $1 in
@@ -142,7 +140,7 @@ parse_args() {
     done
 }
 
-# Resolves the effective host: CLI arg > env var > config file. Errors if unset.
+# Precedence: CLI arg > env var > config file.
 resolve_host() {
     HOST="${HOST:-${CLIPSSH_HOST:-$(config_get host)}}"
     if [[ -z "$HOST" ]]; then
@@ -150,7 +148,6 @@ resolve_host() {
     fi
 }
 
-# Detects OS and sets PASTE_CMD on Linux. Errors if no tool is available.
 detect_clipboard_tool() {
     if [[ "$OSTYPE" == "darwin"* ]]; then
         if ! command -v clipssh-paste &> /dev/null; then
@@ -169,7 +166,6 @@ detect_clipboard_tool() {
     fi
 }
 
-# Writes the clipboard image to TEMP_FILE; sets SOURCE_LINE on macOS.
 extract_clipboard_image() {
     if [[ "$OSTYPE" == "darwin"* ]]; then
         STDERR_FILE=$(mktemp)
@@ -191,23 +187,14 @@ extract_clipboard_image() {
     fi
 }
 
-# Derives a remote filename from SOURCE_LINE (macOS) or uses a generic one.
-# Echoes the filename so callers can capture it.
 compute_remote_filename() {
     local timestamp="$1" source_line="${2:-}"
     if [[ "$OSTYPE" == "darwin"* ]]; then
         case "$source_line" in
-            source:file:*)
-                local original_path="${source_line#source:file:}"
-                local original_name; original_name=$(basename "$original_path")
-                local original_base="${original_name%.*}"
-                echo "${original_base}-${timestamp}.png"
-                ;;
-            source:path:*)
-                local original_path="${source_line#source:path:}"
-                local original_name; original_name=$(basename "$original_path")
-                local original_base="${original_name%.*}"
-                echo "${original_base}-${timestamp}.png"
+            source:file:*|source:path:*)
+                local original_name="${source_line#source:*:}"
+                original_name="${original_name##*/}"
+                echo "${original_name%.*}-${timestamp}.png"
                 ;;
             *)
                 echo "clipboard-${timestamp}.png"
@@ -218,14 +205,12 @@ compute_remote_filename() {
     fi
 }
 
-# Resolves the remote directory: env var > config file > default (/tmp).
+# Precedence: env var > config file > /tmp.
 resolve_remote_dir() {
     local dir="${CLIPSSH_REMOTE_DIR:-$(config_get remote_dir)}"
     echo "${dir:-/tmp}"
 }
 
-# Uploads TEMP_FILE to $HOST:$REMOTE_DIR/$REMOTE_FILENAME via ssh.
-# Echoes the absolute remote path on success.
 upload_to_remote() {
     local host="$1" remote_dir="$2" remote_filename="$3" local_file="$4"
     local remote_path
@@ -243,7 +228,6 @@ upload_to_remote() {
     echo "$remote_path"
 }
 
-# Copies a string to the local clipboard (macOS / Linux). No-op if unavailable.
 copy_to_local_clipboard() {
     local value="$1"
     if [[ "$OSTYPE" == "darwin"* ]]; then
@@ -258,7 +242,6 @@ copy_to_local_clipboard() {
 main() {
     set -e
 
-    # Top-level dispatch for the `config` subcommand.
     if [[ "${1:-}" == "config" ]]; then
         shift
         handle_config_command "$@"
@@ -286,8 +269,7 @@ main() {
     echo "Path copied to clipboard - paste it directly"
 }
 
-# Only run main when executed directly. When sourced (e.g. by tests),
-# functions are made available without side effects.
+# Run main only when executed directly, not when sourced.
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     main "$@"
 fi

@@ -21,12 +21,11 @@ test-coverage:
 	@rm -rf coverage
 	@mkdir -p coverage
 	kcov --include-path=$(CURDIR)/clipssh coverage bats tests/unit tests/integration
-	@python3 -c "import json; d=json.load(open('coverage/bats.$$(ls coverage | grep ^bats | head -1 | cut -d. -f2)/coverage.json')); print('Coverage:', d['percent_covered'] + '%')" 2>/dev/null || \
-	  find coverage -name coverage.json -exec python3 -c "import json,sys; d=json.load(open(sys.argv[1])); [print(f['percent_covered']+'%  '+f['file']) for f in d['files']]" {} \;
+	@jq -r '.files[] | "\(.percent_covered)%  \(.file)"' coverage/bats/coverage.json
 
 lint:
 	shellcheck clipssh
 
 clean:
 	rm -rf coverage build
-	$(MAKE) -C swift clean 2>/dev/null || true
+	$(MAKE) -C swift clean

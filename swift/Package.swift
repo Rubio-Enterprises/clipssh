@@ -11,13 +11,10 @@ let package = Package(
         .library(name: "ClipsshPasteCore", targets: ["ClipsshPasteCore"]),
     ],
     targets: [
-        // Pure (AppKit-free) helpers. Lives here so it can be unit tested
-        // without spinning up an NSPasteboard.
         .target(
             name: "ClipsshPasteCore",
             path: "Sources/ClipsshPasteCore"
         ),
-        // The macOS executable — wires up NSPasteboard and stdout/stderr.
         .executableTarget(
             name: "clipssh-paste",
             dependencies: ["ClipsshPasteCore"],

@@ -78,13 +78,13 @@ teardown() {
 @test "parse_args: positional argument is captured as HOST" {
     HOST=""
     parse_args user@server
-    [[ "$HOST" == "user@server" ]]
+    assert_equal "$HOST" "user@server"
 }
 
 @test "parse_args: last positional wins when multiple are given" {
     HOST=""
     parse_args first@host second@host
-    [[ "$HOST" == "second@host" ]]
+    assert_equal "$HOST" "second@host"
 }
 
 # --- resolve_host -----------------------------------------------------------
@@ -93,21 +93,21 @@ teardown() {
     config_set host config@host
     HOST="cli@host"
     CLIPSSH_HOST="env@host" resolve_host
-    [[ "$HOST" == "cli@host" ]]
+    assert_equal "$HOST" "cli@host"
 }
 
 @test "resolve_host: falls back to CLIPSSH_HOST when CLI arg is empty" {
     config_set host config@host
     HOST=""
     CLIPSSH_HOST="env@host" resolve_host
-    [[ "$HOST" == "env@host" ]]
+    assert_equal "$HOST" "env@host"
 }
 
 @test "resolve_host: falls back to the config file when neither CLI nor env is set" {
     config_set host config@host
     HOST=""
     resolve_host
-    [[ "$HOST" == "config@host" ]]
+    assert_equal "$HOST" "config@host"
 }
 
 @test "resolve_host: errors when nothing is configured" {
@@ -122,14 +122,14 @@ teardown() {
     install_mock xclip 'exit 0'
     PASTE_CMD=""
     detect_clipboard_tool
-    [[ "$PASTE_CMD" == "xclip -selection clipboard -target image/png -o" ]]
+    assert_equal "$PASTE_CMD" "xclip -selection clipboard -target image/png -o"
 }
 
 @test "detect_clipboard_tool: falls back to wl-paste when xclip is missing" {
     install_mock wl-paste 'exit 0'
     PASTE_CMD=""
     detect_clipboard_tool
-    [[ "$PASTE_CMD" == "wl-paste --type image/png" ]]
+    assert_equal "$PASTE_CMD" "wl-paste --type image/png"
 }
 
 @test "detect_clipboard_tool: errors on linux when no tool is found" {
@@ -220,19 +220,19 @@ teardown() {
 @test "copy_to_local_clipboard: pipes to xclip on linux when available" {
     install_mock xclip "cat > \"$TEST_TMP/xclip.in\""
     copy_to_local_clipboard "hello"
-    [[ "$(cat "$TEST_TMP/xclip.in")" == "hello" ]]
+    assert_equal "$(<"$TEST_TMP/xclip.in")" "hello"
 }
 
 @test "copy_to_local_clipboard: falls back to wl-copy when xclip is missing" {
     install_mock wl-copy "cat > \"$TEST_TMP/wl.in\""
     copy_to_local_clipboard "from-wl"
-    [[ "$(cat "$TEST_TMP/wl.in")" == "from-wl" ]]
+    assert_equal "$(<"$TEST_TMP/wl.in")" "from-wl"
 }
 
 @test "copy_to_local_clipboard: uses pbcopy on macOS" {
     install_mock pbcopy "cat > \"$TEST_TMP/pb.in\""
     OSTYPE="darwin23" copy_to_local_clipboard "from-mac"
-    [[ "$(cat "$TEST_TMP/pb.in")" == "from-mac" ]]
+    assert_equal "$(<"$TEST_TMP/pb.in")" "from-mac"
 }
 
 @test "copy_to_local_clipboard: no-op when no clipboard tool is available" {

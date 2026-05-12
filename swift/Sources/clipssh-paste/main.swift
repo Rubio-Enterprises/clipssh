@@ -68,7 +68,7 @@ func convertToPNG(_ data: Data) -> Data? {
     return pngData
 }
 
-func fileToStdoutPNG(path: String, origin: ClipsshPasteCore.SourceOrigin) -> Never {
+func fileToStdoutPNG(path: String, source: ClipsshPasteCore.Source) -> Never {
     let url = URL(fileURLWithPath: path)
     guard let data = try? Data(contentsOf: url) else {
         exitWithError("Failed to read image file: \(path)")
@@ -76,7 +76,7 @@ func fileToStdoutPNG(path: String, origin: ClipsshPasteCore.SourceOrigin) -> Nev
     guard let pngData = convertToPNG(data) else {
         exitWithError("Failed to convert image to PNG")
     }
-    writePNGToStdout(pngData, source: ClipsshPasteCore.sourceMarker(origin: origin, payload: path))
+    writePNGToStdout(pngData, source: ClipsshPasteCore.sourceMarker(source))
 }
 
 // --- Detection 1: File references ---
@@ -94,7 +94,7 @@ func tryFileReference() {
             exitWithError("Copied file is not a supported image type: \(resolvedPath)", code: 2)
         }
 
-        fileToStdoutPNG(path: resolvedPath, origin: .file)
+        fileToStdoutPNG(path: resolvedPath, source: .file(resolvedPath))
     }
 }
 
@@ -112,12 +112,12 @@ func tryRawImageData() {
         if let data = pasteboard.data(forType: type) {
             if type == .png {
                 // PNG data can be written directly without re-encoding
-                writePNGToStdout(data, source: ClipsshPasteCore.sourceMarker(origin: .image, payload: ""))
+                writePNGToStdout(data, source: ClipsshPasteCore.sourceMarker(.image))
             }
             guard let pngData = convertToPNG(data) else {
                 continue
             }
-            writePNGToStdout(pngData, source: ClipsshPasteCore.sourceMarker(origin: .image, payload: ""))
+            writePNGToStdout(pngData, source: ClipsshPasteCore.sourceMarker(.image))
         }
     }
 }
@@ -143,7 +143,7 @@ func tryTextPath() {
         return
     }
 
-    fileToStdoutPNG(path: expanded, origin: .path)
+    fileToStdoutPNG(path: expanded, source: .path(expanded))
 }
 
 tryTextPath()

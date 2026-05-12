@@ -59,17 +59,17 @@ EOF
 # --- config_set -------------------------------------------------------------
 
 @test "config_set: creates the config directory if missing" {
-    [[ ! -d "$XDG_CONFIG_HOME/clipssh" ]]
+    assert_dir_not_exists "$XDG_CONFIG_HOME/clipssh"
     config_set host user@example.com
-    [[ -d "$XDG_CONFIG_HOME/clipssh" ]]
-    [[ -f "$XDG_CONFIG_HOME/clipssh/config" ]]
+    assert_dir_exists "$XDG_CONFIG_HOME/clipssh"
+    assert_file_exists "$XDG_CONFIG_HOME/clipssh/config"
 }
 
 @test "config_set: appends a new key to an existing config" {
     config_set host user@example.com
     config_set remote_dir /tmp/uploads
-    grep -q "^host=user@example.com$" "$XDG_CONFIG_HOME/clipssh/config"
-    grep -q "^remote_dir=/tmp/uploads$" "$XDG_CONFIG_HOME/clipssh/config"
+    assert_file_contains "$XDG_CONFIG_HOME/clipssh/config" "^host=user@example.com$"
+    assert_file_contains "$XDG_CONFIG_HOME/clipssh/config" "^remote_dir=/tmp/uploads$"
 }
 
 @test "config_set: rewrites an existing key in place (no duplicates)" {
