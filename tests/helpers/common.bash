@@ -14,7 +14,9 @@ CLIPSSH_BIN="$PROJECT_ROOT/clipssh"
 # which lets tests deterministically reproduce "no clipboard tool installed".
 ISOLATED_PATH="/usr/bin:/bin"
 
-# Locate bats-support/assert/file across apt + Homebrew layouts.
+# Locate bats-support/assert/file across apt + Homebrew layouts and abort the
+# test run with a clear message if any of them is missing — otherwise tests
+# fail later with cryptic "command not found: assert_output" errors.
 load_bats_libs() {
     BATS_LIB_PATH="/usr/lib/bats:/usr/local/lib:/opt/homebrew/lib${BATS_LIB_PATH:+:$BATS_LIB_PATH}"
     export BATS_LIB_PATH
@@ -33,6 +35,13 @@ load_bats_libs() {
             done
         fi
     done
+    if ! declare -F assert_output >/dev/null \
+        || ! declare -F assert_file_exists >/dev/null; then
+        echo "common.bash: bats-assert / bats-file not found." >&2
+        echo "  Searched: $BATS_LIB_PATH" >&2
+        echo "  Run 'make setup' to install them." >&2
+        exit 1
+    fi
 }
 
 common_setup() {

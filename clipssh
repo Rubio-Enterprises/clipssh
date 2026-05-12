@@ -4,6 +4,12 @@
 # https://github.com/strubio-ray/clipssh
 #
 
+# Enable errexit only when the script is the program's entry point.
+# Tests source this file and don't want errexit leaking into their shell.
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    set -e
+fi
+
 VERSION="%%VERSION%%"
 
 # Colors
@@ -168,11 +174,8 @@ detect_clipboard_tool() {
 
 extract_clipboard_image() {
     if [[ "$OSTYPE" == "darwin"* ]]; then
-        STDERR_FILE=$(mktemp)
-        trap 'rm -f "$TEMP_FILE" "$STDERR_FILE"' EXIT
         if clipssh-paste > "$TEMP_FILE" 2>"$STDERR_FILE"; then
             SOURCE_LINE=$(tail -1 "$STDERR_FILE")
-            rm -f "$STDERR_FILE"
         else
             error "$(tail -1 "$STDERR_FILE")"
         fi
@@ -187,25 +190,38 @@ extract_clipboard_image() {
     fi
 }
 
+# Replaces any character outside [A-Za-z0-9._-] with '_'. Applied to the
+# clipboard-derived basename before it's interpolated into the remote shell
+# string in upload_to_remote — defense in depth against a clipboard payload
+# that contains shell metacharacters.
+sanitize_filename() {
+    local input="$1"
+    echo "${input//[^A-Za-z0-9._-]/_}"
+}
+
 compute_remote_filename() {
     local timestamp="$1" source_line="${2:-}"
+    local base
     if [[ "$OSTYPE" == "darwin"* ]]; then
         case "$source_line" in
             source:file:*|source:path:*)
                 local original_name="${source_line#source:*:}"
                 original_name="${original_name##*/}"
-                echo "${original_name%.*}-${timestamp}.png"
+                base="${original_name%.*}"
                 ;;
             *)
-                echo "clipboard-${timestamp}.png"
+                base="clipboard"
                 ;;
         esac
     else
-        echo "clipboard-${timestamp}.png"
+        base="clipboard"
     fi
+    echo "$(sanitize_filename "$base")-${timestamp}.png"
 }
 
 # Precedence: env var > config file > /tmp.
+# Note: remote_dir is user-controlled (config / env) and is intentionally
+# evaluated on the remote shell to expand `~`. It is treated as trusted.
 resolve_remote_dir() {
     local dir="${CLIPSSH_REMOTE_DIR:-$(config_get remote_dir)}"
     echo "${dir:-/tmp}"
@@ -213,18 +229,26 @@ resolve_remote_dir() {
 
 upload_to_remote() {
     local host="$1" remote_dir="$2" remote_filename="$3" local_file="$4"
-    local remote_path
-    # SC2029: intentional. The literal "$remote_dir" is interpolated locally
-    # so the remote shell can run `eval echo` and expand ~ on the remote host.
+    local remote_path err_file
+    err_file=$(mktemp)
+    # SC2029: $remote_dir interpolates locally so the remote shell can run
+    # `eval echo` and expand ~. $remote_filename is sanitized in
+    # compute_remote_filename so it can't carry shell metacharacters.
     # shellcheck disable=SC2029
     remote_path=$(ssh "$host" "
         DIR=\$(eval echo \"$remote_dir\")
         PATH_FULL=\"\$DIR/${remote_filename}\"
         mkdir -p \"\$DIR\" && cat > \"\$PATH_FULL\" && echo \"\$PATH_FULL\"
-    " < "$local_file" 2>/dev/null) || true
+    " < "$local_file" 2>"$err_file") || true
     if [[ -z "$remote_path" ]]; then
+        local detail; detail=$(tail -1 "$err_file" 2>/dev/null || true)
+        rm -f "$err_file"
+        if [[ -n "$detail" ]]; then
+            error "Failed to upload to $host: $detail"
+        fi
         error "Failed to upload to $host"
     fi
+    rm -f "$err_file"
     echo "$remote_path"
 }
 
@@ -240,8 +264,6 @@ copy_to_local_clipboard() {
 }
 
 main() {
-    set -e
-
     if [[ "${1:-}" == "config" ]]; then
         shift
         handle_config_command "$@"
@@ -253,7 +275,8 @@ main() {
     detect_clipboard_tool
 
     TEMP_FILE=$(mktemp).png
-    trap 'rm -f "$TEMP_FILE"' EXIT
+    STDERR_FILE=$(mktemp)
+    trap 'rm -f "$TEMP_FILE" "$STDERR_FILE"' EXIT
 
     SOURCE_LINE=""
     extract_clipboard_image
@@ -269,7 +292,6 @@ main() {
     echo "Path copied to clipboard - paste it directly"
 }
 
-# Run main only when executed directly, not when sourced.
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     main "$@"
 fi

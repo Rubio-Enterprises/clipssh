@@ -97,27 +97,26 @@ EOF
     run config_list
     assert_success
     assert_output --partial "Config file: $XDG_CONFIG_HOME/clipssh/config"
-    assert_output --partial "host         = (not set)"
-    assert_output --partial "remote_dir   = /tmp"
-    assert_output --partial "(default)"
+    assert_line --regexp '^[[:space:]]*host[[:space:]]+= \(not set\)$'
+    assert_line --regexp '^[[:space:]]*remote_dir[[:space:]]+= /tmp[[:space:]]+\(default\)$'
 }
 
 @test "config_list: marks values from the config file with (config)" {
     config_set host user@example.com
     run config_list
     assert_success
-    assert_output --partial "host         = user@example.com  (config)"
+    assert_line --regexp '^[[:space:]]*host[[:space:]]+= user@example\.com[[:space:]]+\(config\)$'
 }
 
 @test "config_list: env vars take precedence over config file and are marked (env)" {
     config_set host file@host
     CLIPSSH_HOST=env@host run config_list
     assert_success
-    assert_output --partial "host         = env@host  (env)"
+    assert_line --regexp '^[[:space:]]*host[[:space:]]+= env@host[[:space:]]+\(env\)$'
 }
 
 @test "config_list: env var for remote_dir wins over default" {
     CLIPSSH_REMOTE_DIR=/custom/dir run config_list
     assert_success
-    assert_output --partial "remote_dir   = /custom/dir  (env)"
+    assert_line --regexp '^[[:space:]]*remote_dir[[:space:]]+= /custom/dir[[:space:]]+\(env\)$'
 }

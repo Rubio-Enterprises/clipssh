@@ -184,6 +184,26 @@ EOF
     assert_output --partial "Failed to upload to target@remote"
 }
 
+@test "CLI: surfaces ssh's stderr in the failure message" {
+    install_mock xclip "printf 'fake-png-bytes'"
+    install_mock ssh "echo 'Permission denied (publickey)' >&2; exit 255"
+    "$CLIPSSH_BIN" config set host target@remote
+
+    run -1 "$CLIPSSH_BIN"
+    assert_output --partial "Failed to upload to target@remote"
+    assert_output --partial "Permission denied (publickey)"
+}
+
+@test "CLI: config set propagates errors instead of silently continuing" {
+    # Point XDG_CONFIG_HOME at a path that's actually a regular file — the
+    # mkdir -p inside config_set will fail. Without set -e on the config
+    # codepath, the script would print "Set host = ..." anyway.
+    : > "$TEST_TMP/not-a-dir"
+    XDG_CONFIG_HOME="$TEST_TMP/not-a-dir" run "$CLIPSSH_BIN" config set host me@example.com
+    refute [ "$status" -eq 0 ]
+    refute_output --partial "Set host"
+}
+
 @test "CLI: errors when the extracted image is empty" {
     install_mock xclip "exit 0"
     install_ssh_recorder

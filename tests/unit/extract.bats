@@ -10,6 +10,8 @@ setup() {
     common_setup
     source_clipssh
     TEMP_FILE="$TEST_TMP/clip.png"
+    STDERR_FILE="$TEST_TMP/clip.err"
+    : > "$STDERR_FILE"
     SOURCE_LINE=""
 }
 

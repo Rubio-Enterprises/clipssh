@@ -8,8 +8,12 @@ on:
 
 jobs:
   shell:
-    name: Shell tests (bats + shellcheck + kcov)
-    runs-on: ubuntu-latest
+    name: Shell tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - name: Install dependencies
@@ -20,7 +24,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-report
+          name: coverage-report-${{ matrix.os }}
           path: coverage/
           if-no-files-found: ignore
 

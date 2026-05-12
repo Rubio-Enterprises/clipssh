@@ -1,4 +1,4 @@
-.PHONY: help setup test test-shell test-swift test-coverage check-coverage check lint clean
+.PHONY: help setup check-prereqs test test-shell test-swift test-coverage check-coverage check lint clean
 
 COVERAGE_FLOOR ?= 80
 COVERAGE_JSON  ?= coverage/bats/coverage.json
@@ -14,19 +14,32 @@ help:
 	@echo "  check           Lint + check-coverage (what CI runs)"
 	@echo "  lint            Run shellcheck against clipssh"
 	@echo "  clean           Remove coverage and build artifacts"
+	@echo ""
+	@echo "First-time setup: 'make setup' (installs deps via apt or brew)."
 
 setup:
 	./script/bootstrap
 
+# Verify the tools `test` and `check` need. Printing a single clear message
+# beats letting `bats` fail with "command not found".
+check-prereqs:
+	@missing=; \
+	for t in bats shellcheck jq kcov; do command -v "$$t" >/dev/null 2>&1 || missing="$$missing $$t"; done; \
+	if [ -n "$$missing" ]; then \
+	    echo "Missing tools:$$missing"; \
+	    echo "Run 'make setup' to install them."; \
+	    exit 1; \
+	fi
+
 test: test-shell
 
-test-shell:
+test-shell: check-prereqs
 	bats tests/unit tests/integration
 
 test-swift:
 	$(MAKE) -C swift test
 
-test-coverage:
+test-coverage: check-prereqs
 	@rm -rf coverage
 	@mkdir -p coverage
 	kcov --include-path=$(CURDIR)/clipssh coverage bats tests/unit tests/integration

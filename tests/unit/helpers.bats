@@ -193,6 +193,39 @@ teardown() {
     assert_output "my.photo.v2-42.png"
 }
 
+@test "compute_remote_filename: sanitizes shell metacharacters in the clipboard-derived basename" {
+    # Defense in depth: even if a malicious file ends up on the clipboard,
+    # the basename interpolated into the remote ssh command must not be
+    # able to break out and run arbitrary code.
+    OSTYPE="darwin23" run compute_remote_filename 42 'source:file:/tmp/foo";rm -rf ~;echo "x.png'
+    assert_success
+    refute_output --partial '"'
+    refute_output --partial ';'
+    refute_output --partial '$'
+    refute_output --partial '`'
+    refute_output --partial ' '
+}
+
+# --- sanitize_filename ------------------------------------------------------
+
+@test "sanitize_filename: leaves safe basenames alone" {
+    run sanitize_filename "my-photo.v2_final"
+    assert_output "my-photo.v2_final"
+}
+
+@test "sanitize_filename: replaces shell metacharacters with underscores" {
+    run sanitize_filename 'foo";rm -rf ~;echo "x'
+    refute_output --partial '"'
+    refute_output --partial ';'
+    refute_output --partial ' '
+    refute_output --partial '`'
+}
+
+@test "sanitize_filename: passes through dots, dashes, and underscores" {
+    run sanitize_filename "a.b-c_d.e"
+    assert_output "a.b-c_d.e"
+}
+
 # --- resolve_remote_dir -----------------------------------------------------
 
 @test "resolve_remote_dir: defaults to /tmp when nothing is set" {
