@@ -4,8 +4,6 @@
 # https://github.com/strubio-ray/clipssh
 #
 
-set -e
-
 VERSION="%%VERSION%%"
 
 # Colors
@@ -100,146 +98,196 @@ config_list() {
     done
 }
 
-# Parse arguments
-case "${1:-}" in
-    config)
-        shift
-        case "${1:-}" in
-            set)
-                [[ -z "${2:-}" || -z "${3:-}" ]] && error "Usage: clipssh config set <key> <value>"
-                config_set "$2" "$3"
-                success "Set $2 = $3"
+# Dispatches `clipssh config ...` subcommands. Expects args after `config`.
+handle_config_command() {
+    case "${1:-}" in
+        set)
+            [[ -z "${2:-}" || -z "${3:-}" ]] && error "Usage: clipssh config set <key> <value>"
+            config_set "$2" "$3"
+            success "Set $2 = $3"
+            ;;
+        get)
+            [[ -z "${2:-}" ]] && error "Usage: clipssh config get <key>"
+            config_get "$2"
+            ;;
+        list|"")
+            config_list
+            ;;
+        *)
+            error "Unknown config command: $1. Use: set, get, list"
+            ;;
+    esac
+}
+
+# Parses CLI args, setting global HOST. May exit early for -h / -v.
+parse_args() {
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            -h|--help)
+                usage
+                exit 0
                 ;;
-            get)
-                [[ -z "${2:-}" ]] && error "Usage: clipssh config get <key>"
-                config_get "$2"
+            -v|--version)
+                echo "clipssh $VERSION"
+                exit 0
                 ;;
-            list|"")
-                config_list
+            -*)
+                error "Unknown option: $1"
                 ;;
             *)
-                error "Unknown config command: $1. Use: set, get, list"
+                HOST="$1"
+                shift
                 ;;
         esac
+    done
+}
+
+# Resolves the effective host: CLI arg > env var > config file. Errors if unset.
+resolve_host() {
+    HOST="${HOST:-${CLIPSSH_HOST:-$(config_get host)}}"
+    if [[ -z "$HOST" ]]; then
+        error "No host specified. Use: clipssh user@host or run: clipssh config set host user@host"
+    fi
+}
+
+# Detects OS and sets PASTE_CMD on Linux. Errors if no tool is available.
+detect_clipboard_tool() {
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        if ! command -v clipssh-paste &> /dev/null; then
+            error "clipssh-paste not found. Install with: brew install strubio-ray/tap/clipssh"
+        fi
+    elif [[ "$OSTYPE" == "linux"* ]]; then
+        if command -v xclip &> /dev/null; then
+            PASTE_CMD="xclip -selection clipboard -target image/png -o"
+        elif command -v wl-paste &> /dev/null; then
+            PASTE_CMD="wl-paste --type image/png"
+        else
+            error "No clipboard tool found. Install xclip or wl-clipboard"
+        fi
+    else
+        error "Unsupported OS: $OSTYPE"
+    fi
+}
+
+# Writes the clipboard image to TEMP_FILE; sets SOURCE_LINE on macOS.
+extract_clipboard_image() {
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        STDERR_FILE=$(mktemp)
+        trap 'rm -f "$TEMP_FILE" "$STDERR_FILE"' EXIT
+        if clipssh-paste > "$TEMP_FILE" 2>"$STDERR_FILE"; then
+            SOURCE_LINE=$(tail -1 "$STDERR_FILE")
+            rm -f "$STDERR_FILE"
+        else
+            error "$(tail -1 "$STDERR_FILE")"
+        fi
+    else
+        if ! $PASTE_CMD > "$TEMP_FILE" 2>/dev/null; then
+            error "No image in clipboard. Take a screenshot first"
+        fi
+    fi
+
+    if [[ ! -s "$TEMP_FILE" ]]; then
+        error "Clipboard image is empty"
+    fi
+}
+
+# Derives a remote filename from SOURCE_LINE (macOS) or uses a generic one.
+# Echoes the filename so callers can capture it.
+compute_remote_filename() {
+    local timestamp="$1" source_line="${2:-}"
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        case "$source_line" in
+            source:file:*)
+                local original_path="${source_line#source:file:}"
+                local original_name; original_name=$(basename "$original_path")
+                local original_base="${original_name%.*}"
+                echo "${original_base}-${timestamp}.png"
+                ;;
+            source:path:*)
+                local original_path="${source_line#source:path:}"
+                local original_name; original_name=$(basename "$original_path")
+                local original_base="${original_name%.*}"
+                echo "${original_base}-${timestamp}.png"
+                ;;
+            *)
+                echo "clipboard-${timestamp}.png"
+                ;;
+        esac
+    else
+        echo "clipboard-${timestamp}.png"
+    fi
+}
+
+# Resolves the remote directory: env var > config file > default (/tmp).
+resolve_remote_dir() {
+    local dir="${CLIPSSH_REMOTE_DIR:-$(config_get remote_dir)}"
+    echo "${dir:-/tmp}"
+}
+
+# Uploads TEMP_FILE to $HOST:$REMOTE_DIR/$REMOTE_FILENAME via ssh.
+# Echoes the absolute remote path on success.
+upload_to_remote() {
+    local host="$1" remote_dir="$2" remote_filename="$3" local_file="$4"
+    local remote_path
+    # SC2029: intentional. The literal "$remote_dir" is interpolated locally
+    # so the remote shell can run `eval echo` and expand ~ on the remote host.
+    # shellcheck disable=SC2029
+    remote_path=$(ssh "$host" "
+        DIR=\$(eval echo \"$remote_dir\")
+        PATH_FULL=\"\$DIR/${remote_filename}\"
+        mkdir -p \"\$DIR\" && cat > \"\$PATH_FULL\" && echo \"\$PATH_FULL\"
+    " < "$local_file" 2>/dev/null) || true
+    if [[ -z "$remote_path" ]]; then
+        error "Failed to upload to $host"
+    fi
+    echo "$remote_path"
+}
+
+# Copies a string to the local clipboard (macOS / Linux). No-op if unavailable.
+copy_to_local_clipboard() {
+    local value="$1"
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        echo -n "$value" | pbcopy
+    elif command -v xclip &> /dev/null; then
+        echo -n "$value" | xclip -selection clipboard
+    elif command -v wl-copy &> /dev/null; then
+        echo -n "$value" | wl-copy
+    fi
+}
+
+main() {
+    set -e
+
+    # Top-level dispatch for the `config` subcommand.
+    if [[ "${1:-}" == "config" ]]; then
+        shift
+        handle_config_command "$@"
         exit 0
-        ;;
-esac
-
-while [[ $# -gt 0 ]]; do
-    case $1 in
-        -h|--help)
-            usage
-            exit 0
-            ;;
-        -v|--version)
-            echo "clipssh $VERSION"
-            exit 0
-            ;;
-        -*)
-            error "Unknown option: $1"
-            ;;
-        *)
-            HOST="$1"
-            shift
-            ;;
-    esac
-done
-
-# Determine host (CLI arg > env var > config file)
-HOST="${HOST:-${CLIPSSH_HOST:-$(config_get host)}}"
-if [[ -z "$HOST" ]]; then
-    error "No host specified. Use: clipssh user@host or run: clipssh config set host user@host"
-fi
-
-# Check OS and clipboard tool
-if [[ "$OSTYPE" == "darwin"* ]]; then
-    if ! command -v clipssh-paste &> /dev/null; then
-        error "clipssh-paste not found. Install with: brew install strubio-ray/tap/clipssh"
     fi
-elif [[ "$OSTYPE" == "linux"* ]]; then
-    if command -v xclip &> /dev/null; then
-        PASTE_CMD="xclip -selection clipboard -target image/png -o"
-    elif command -v wl-paste &> /dev/null; then
-        PASTE_CMD="wl-paste --type image/png"
-    else
-        error "No clipboard tool found. Install xclip or wl-clipboard"
-    fi
-else
-    error "Unsupported OS: $OSTYPE"
+
+    parse_args "$@"
+    resolve_host
+    detect_clipboard_tool
+
+    TEMP_FILE=$(mktemp).png
+    trap 'rm -f "$TEMP_FILE"' EXIT
+
+    SOURCE_LINE=""
+    extract_clipboard_image
+
+    local timestamp; timestamp=$(date +%s)
+    local remote_filename; remote_filename=$(compute_remote_filename "$timestamp" "$SOURCE_LINE")
+    local remote_dir; remote_dir=$(resolve_remote_dir)
+
+    local remote_path; remote_path=$(upload_to_remote "$HOST" "$remote_dir" "$remote_filename" "$TEMP_FILE")
+
+    copy_to_local_clipboard "$remote_path"
+    success "Uploaded: $remote_path"
+    echo "Path copied to clipboard - paste it directly"
+}
+
+# Only run main when executed directly. When sourced (e.g. by tests),
+# functions are made available without side effects.
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
 fi
-
-# Create temp file
-TEMP_FILE=$(mktemp).png
-trap "rm -f $TEMP_FILE" EXIT
-
-# Extract image from clipboard
-if [[ "$OSTYPE" == "darwin"* ]]; then
-    STDERR_FILE=$(mktemp)
-    trap "rm -f $TEMP_FILE $STDERR_FILE" EXIT
-    if clipssh-paste > "$TEMP_FILE" 2>"$STDERR_FILE"; then
-        SOURCE_LINE=$(tail -1 "$STDERR_FILE")
-        rm -f "$STDERR_FILE"
-    else
-        error "$(tail -1 "$STDERR_FILE")"
-    fi
-else
-    if ! $PASTE_CMD > "$TEMP_FILE" 2>/dev/null; then
-        error "No image in clipboard. Take a screenshot first"
-    fi
-fi
-
-# Verify file has content
-if [[ ! -s "$TEMP_FILE" ]]; then
-    error "Clipboard image is empty"
-fi
-
-# Determine remote filename
-TIMESTAMP=$(date +%s)
-if [[ "$OSTYPE" == "darwin"* ]]; then
-    case "$SOURCE_LINE" in
-        source:file:*)
-            ORIGINAL_PATH="${SOURCE_LINE#source:file:}"
-            ORIGINAL_NAME=$(basename "$ORIGINAL_PATH")
-            ORIGINAL_BASE="${ORIGINAL_NAME%.*}"
-            REMOTE_FILENAME="${ORIGINAL_BASE}-${TIMESTAMP}.png"
-            ;;
-        source:path:*)
-            ORIGINAL_PATH="${SOURCE_LINE#source:path:}"
-            ORIGINAL_NAME=$(basename "$ORIGINAL_PATH")
-            ORIGINAL_BASE="${ORIGINAL_NAME%.*}"
-            REMOTE_FILENAME="${ORIGINAL_BASE}-${TIMESTAMP}.png"
-            ;;
-        *)
-            REMOTE_FILENAME="clipboard-${TIMESTAMP}.png"
-            ;;
-    esac
-else
-    REMOTE_FILENAME="clipboard-${TIMESTAMP}.png"
-fi
-
-# Generate remote path (env var > config file > default)
-REMOTE_DIR="${CLIPSSH_REMOTE_DIR:-$(config_get remote_dir)}"
-REMOTE_DIR="${REMOTE_DIR:-/tmp}"
-
-# Upload via SSH (~ is expanded by the remote shell using eval echo)
-REMOTE_PATH=$(ssh "$HOST" "
-    DIR=\$(eval echo \"$REMOTE_DIR\")
-    PATH_FULL=\"\$DIR/${REMOTE_FILENAME}\"
-    mkdir -p \"\$DIR\" && cat > \"\$PATH_FULL\" && echo \"\$PATH_FULL\"
-" < "$TEMP_FILE" 2>/dev/null) || true
-
-if [[ -z "$REMOTE_PATH" ]]; then
-    error "Failed to upload to $HOST"
-fi
-
-# Copy path to clipboard
-if [[ "$OSTYPE" == "darwin"* ]]; then
-    echo -n "$REMOTE_PATH" | pbcopy
-elif command -v xclip &> /dev/null; then
-    echo -n "$REMOTE_PATH" | xclip -selection clipboard
-elif command -v wl-copy &> /dev/null; then
-    echo -n "$REMOTE_PATH" | wl-copy
-fi
-
-success "Uploaded: $REMOTE_PATH"
-echo "Path copied to clipboard - paste it directly"
