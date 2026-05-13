@@ -357,8 +357,14 @@ EOF
 
 # Stateful xclip: any image read returns the current contents of $STATE_FILE.
 # Lets a test drive the "clipboard" by rewriting that file mid-run.
+#
+# The body is piped to install_mock via stdin (rather than captured into an
+# argument with `$(cat <<EOF … EOF)`) because the case-pattern `text/uri-list)`
+# is an unmatched `)` as far as the outer `$(…)` paren-counter is concerned;
+# bash 3.2 (macOS /bin/bash) silently drops it when capturing, corrupting the
+# mock with `text/uri-list exit 1 ;;` and a `syntax error` at runtime.
 install_stateful_xclip() {
-    install_mock xclip "$(cat <<'EOF'
+    install_mock xclip <<'EOF'
 state_file="$TEST_TMP/clipboard.state"
 # extract_linux_file_reference probes TARGETS / text/uri-list; fail both so
 # extract falls through to PASTE_CMD (the image read).
@@ -378,7 +384,6 @@ else
     exit 1
 fi
 EOF
-)"
 }
 
 # Per-upload-counting ssh mock: each call writes its stdin to a numbered file
@@ -400,29 +405,14 @@ EOF
     install_counting_ssh
     "$CLIPSSH_BIN" config set host target@remote
 
-    export CLIPSSH_DEBUG_LOG="$TEST_TMP/watch.debug"
     printf 'image-A' > "$TEST_TMP/clipboard.state"
-    "$CLIPSSH_BIN" --watch --interval 0.1 >"$TEST_TMP/watch.stdout" 2>"$TEST_TMP/watch.stderr" &
+    "$CLIPSSH_BIN" --watch --interval 0.1 >/dev/null 2>&1 &
     WATCH_PID=$!
     sleep 1.0  # Many polls of image-A — only the first should upload.
     printf 'image-B' > "$TEST_TMP/clipboard.state"
     sleep 1.0  # Many polls of image-B — only the first should upload.
     kill "$WATCH_PID" 2>/dev/null || true
     wait "$WATCH_PID" 2>/dev/null || true
-
-    # Debug dump on failure
-    if [[ ! -f "$TEST_TMP/ssh.stdin.1" ]]; then
-        echo "--- xclip mock content (od -c) ---" >&3
-        od -c "$MOCK_BIN/xclip" >&3 2>/dev/null
-        echo "--- direct mock invocation ---" >&3
-        "$MOCK_BIN/xclip" -selection clipboard -target image/png -o >"$TEST_TMP/mock.out" 2>"$TEST_TMP/mock.err"
-        echo "mock rc=$?" >&3
-        echo "stdout: $(cat "$TEST_TMP/mock.out")" >&3
-        echo "stderr: $(cat "$TEST_TMP/mock.err")" >&3
-        echo "--- bash versions ---" >&3
-        /bin/bash --version >&3 2>&1 | head -1
-        /usr/bin/env bash --version >&3 2>&1 | head -1
-    fi
 
     # Two uploads, in order, no third.
     assert_file_exists "$TEST_TMP/ssh.stdin.1"

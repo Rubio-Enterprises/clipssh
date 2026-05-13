@@ -68,11 +68,19 @@ common_teardown() {
     rm -rf "${TEST_TMP:?}"
 }
 
-# Install a fake executable in $MOCK_BIN. Body is the script body (sans shebang).
+# Install a fake executable in $MOCK_BIN. The body (sans shebang) is read from
+# the 2nd argument when given, or from stdin otherwise. The stdin form is the
+# safe choice for any body containing parentheses: bash 3.2 (macOS /bin/bash)
+# miscounts parens inside `$(cat <<'EOF' … EOF)` and silently drops unbalanced
+# `)`s — feeding the heredoc straight to a file sidesteps that parser bug.
 install_mock() {
-    local name="$1" body="$2"
+    local name="$1"
     local path="$MOCK_BIN/$name"
-    printf '#!/usr/bin/env bash\n%s\n' "$body" > "$path"
+    if (( $# >= 2 )); then
+        printf '#!/usr/bin/env bash\n%s\n' "$2" > "$path"
+    else
+        { printf '#!/usr/bin/env bash\n'; cat; } > "$path"
+    fi
     chmod +x "$path"
 }
 
