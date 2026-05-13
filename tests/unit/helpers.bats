@@ -332,8 +332,9 @@ teardown() {
 @test "make_timestamp: produces a sortable UTC stamp" {
     run make_timestamp
     assert_success
-    # 20260513T142701Z or 8-digit-T6-digit-Z, or fallback to digits-only epoch.
-    [[ "$output" =~ ^[0-9]+(T[0-9]+Z)?$ ]]
+    # Must be the ISO form (YYYYMMDDTHHMMSSZ) — the epoch-seconds fallback is
+    # only there for busybox `date`, which we don't bless as a supported env.
+    [[ "$output" =~ ^[0-9]{8}T[0-9]{6}Z$ ]]
 }
 
 # --- format_source_label ----------------------------------------------------
@@ -373,6 +374,16 @@ teardown() {
 @test "human_size: large values format as MB" {
     run human_size 1572864
     assert_output "1.5 MB"
+}
+
+@test "human_size: uses '.' as the decimal point under non-C locales" {
+    # Without the LC_ALL=C pin inside human_size, gawk would emit `1,5 MB`
+    # when the user's locale uses a comma as decimal separator. We don't
+    # know whether de_DE is installed on the runner, but the assertion is
+    # one-sided: there must NEVER be a comma.
+    LC_ALL=de_DE.UTF-8 run human_size 1572864
+    refute_output --partial ","
+    assert_output --partial "."
 }
 
 # --- is_supported_image_path ------------------------------------------------
@@ -444,4 +455,143 @@ teardown() {
     run copy_to_local_clipboard "ignored"
     assert_success
     assert_output ""
+}
+
+# --- config_set special-character handling ---------------------------------
+
+@test "config_set: preserves '|' on update (the old sed delimiter would corrupt this)" {
+    config_set host "initial@host"
+    config_set host "user@host|alt"
+    assert_equal "$(config_get host)" "user@host|alt"
+}
+
+@test "config_set: preserves '&' on update (sed replacement would re-expand it)" {
+    config_set remote_dir "/tmp/before"
+    config_set remote_dir "/tmp/a&b"
+    assert_equal "$(config_get remote_dir)" "/tmp/a&b"
+}
+
+@test "config_set: preserves backslashes on update" {
+    config_set host "initial@host"
+    config_set host 'user@host\name'
+    assert_equal "$(config_get host)" 'user@host\name'
+}
+
+@test "config_set: overwrites instead of duplicating on repeat" {
+    config_set host "first@host"
+    config_set host "second@host"
+    # Only one host= line should remain in the config file.
+    local count
+    count=$(grep -c '^host=' "$XDG_CONFIG_HOME/clipssh/config")
+    assert_equal "$count" "1"
+    assert_equal "$(config_get host)" "second@host"
+}
+
+# --- setup_preconditions_met (TTY-independent half of should_offer_setup) --
+
+@test "setup_preconditions_met: returns 0 when nothing is configured and no flags are set" {
+    HOST=""
+    unset CLIPSSH_HOST
+    PRINT_ONLY=0
+    WATCH=0
+    FILE_SOURCE=""
+    SSH_OPTS=()
+    REMOTE_DIR_OVERRIDE=""
+    run setup_preconditions_met
+    assert_success
+}
+
+@test "setup_preconditions_met: returns 1 when HOST is set (CLI host given)" {
+    HOST="cli@host"
+    run setup_preconditions_met
+    assert_failure
+}
+
+@test "setup_preconditions_met: returns 1 when CLIPSSH_HOST is set" {
+    HOST=""
+    CLIPSSH_HOST="env@host" run setup_preconditions_met
+    assert_failure
+}
+
+@test "setup_preconditions_met: returns 1 when host is saved in config" {
+    HOST=""
+    config_set host "config@host"
+    run setup_preconditions_met
+    assert_failure
+}
+
+@test "setup_preconditions_met: returns 1 when --print-only was passed" {
+    HOST=""
+    PRINT_ONLY=1
+    WATCH=0
+    FILE_SOURCE=""
+    SSH_OPTS=()
+    REMOTE_DIR_OVERRIDE=""
+    run setup_preconditions_met
+    assert_failure
+}
+
+@test "setup_preconditions_met: returns 1 when --watch was passed" {
+    HOST=""
+    PRINT_ONLY=0
+    WATCH=1
+    FILE_SOURCE=""
+    SSH_OPTS=()
+    REMOTE_DIR_OVERRIDE=""
+    run setup_preconditions_met
+    assert_failure
+}
+
+@test "setup_preconditions_met: returns 1 when --file was passed" {
+    HOST=""
+    PRINT_ONLY=0
+    WATCH=0
+    FILE_SOURCE="/tmp/x.png"
+    SSH_OPTS=()
+    REMOTE_DIR_OVERRIDE=""
+    run setup_preconditions_met
+    assert_failure
+}
+
+@test "setup_preconditions_met: returns 1 when ssh options were passed" {
+    HOST=""
+    PRINT_ONLY=0
+    WATCH=0
+    FILE_SOURCE=""
+    SSH_OPTS=(-p 2222)
+    REMOTE_DIR_OVERRIDE=""
+    run setup_preconditions_met
+    assert_failure
+}
+
+@test "setup_preconditions_met: returns 1 when --remote-dir was passed" {
+    HOST=""
+    PRINT_ONLY=0
+    WATCH=0
+    FILE_SOURCE=""
+    SSH_OPTS=()
+    REMOTE_DIR_OVERRIDE="/var/uploads"
+    run setup_preconditions_met
+    assert_failure
+}
+
+# --- watch_hash -------------------------------------------------------------
+
+@test "watch_hash: returns a fingerprint of the file" {
+    local f="$TEST_TMP/x.bin"
+    printf 'abc' > "$f"
+    run watch_hash "$f"
+    assert_success
+    # SHA-1("abc") = a9993e364706816aba3e25717850c26c9cd0d89d
+    assert_output "a9993e364706816aba3e25717850c26c9cd0d89d"
+}
+
+@test "watch_hash: returns a different digest for different bytes" {
+    local a="$TEST_TMP/a.bin" b="$TEST_TMP/b.bin"
+    printf 'one' > "$a"
+    printf 'two' > "$b"
+    local ha hb
+    ha=$(watch_hash "$a")
+    hb=$(watch_hash "$b")
+    [[ -n "$ha" && -n "$hb" && "$ha" != "$hb" ]]
 }

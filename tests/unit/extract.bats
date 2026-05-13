@@ -149,6 +149,57 @@ EOF
     assert_failure
 }
 
+@test "extract_linux_file_reference: URL-decodes %XX escapes in the path" {
+    # File whose real path contains a space. File managers emit a URI with
+    # the space percent-encoded as %20 — the extractor must decode it back.
+    local src="$TEST_TMP/with space.png"
+    printf 'png-with-space' > "$src"
+    local encoded="${src// /%20}"
+    install_mock xclip "$(cat <<EOF
+for arg in "\$@"; do
+    if [[ "\$arg" == "TARGETS" ]]; then
+        printf 'TARGETS\ntext/uri-list\n'
+        exit 0
+    fi
+    if [[ "\$arg" == "text/uri-list" ]]; then
+        printf 'file://%s\n' "$encoded"
+        exit 0
+    fi
+done
+exit 1
+EOF
+)"
+    SOURCE_LINE=""
+    extract_linux_file_reference
+    assert_equal "$(<"$TEMP_FILE")" "png-with-space"
+    assert_equal "$SOURCE_LINE" "source:file:$src"
+}
+
+@test "extract_linux_file_reference: strips a 'localhost' host component from file://" {
+    # RFC 8089 allows file://localhost/path as an alternate spelling. Some
+    # desktops emit it; the extractor must yield the same path as file:///.
+    local src="$TEST_TMP/hosted.png"
+    printf 'png-hosted' > "$src"
+    install_mock xclip "$(cat <<EOF
+for arg in "\$@"; do
+    if [[ "\$arg" == "TARGETS" ]]; then
+        printf 'TARGETS\ntext/uri-list\n'
+        exit 0
+    fi
+    if [[ "\$arg" == "text/uri-list" ]]; then
+        printf 'file://localhost%s\n' "$src"
+        exit 0
+    fi
+done
+exit 1
+EOF
+)"
+    SOURCE_LINE=""
+    extract_linux_file_reference
+    assert_equal "$(<"$TEMP_FILE")" "png-hosted"
+    assert_equal "$SOURCE_LINE" "source:file:$src"
+}
+
 # --- Linux: text path on clipboard -----------------------------------------
 
 @test "extract_linux_text_path: copies file when clipboard contains a plain image path" {
@@ -189,5 +240,58 @@ EOF
     install_mock xclip "printf \"'%s'\" \"$src\""
     SOURCE_LINE=""
     extract_linux_text_path
+    assert_equal "$SOURCE_LINE" "source:path:$src"
+}
+
+@test "extract_linux_text_path: strips surrounding double quotes" {
+    local src="$TEST_TMP/dquoted.png"
+    printf 'png' > "$src"
+    install_mock xclip "printf '\"%s\"' '$src'"
+    SOURCE_LINE=""
+    extract_linux_text_path
+    assert_equal "$SOURCE_LINE" "source:path:$src"
+}
+
+@test "extract_linux_text_path: rejects mismatched surrounding quotes" {
+    # The pre-fix regex `^[\'\"](.+)[\'\"]$` matched `"<path>'` and would
+    # successfully strip them — letting a payload-with-mismatched-quotes
+    # masquerade as a path. The fixed regex requires matched pairs.
+    local src="$TEST_TMP/img.png"
+    printf 'png' > "$src"
+    # Build the clipboard contents `"<path>'` in a side file (avoids quoting hell).
+    printf '"%s'\''' "$src" > "$TEST_TMP/clip.txt"
+    install_mock xclip "cat \"$TEST_TMP/clip.txt\""
+    run extract_linux_text_path
+    assert_failure
+}
+
+@test "extract_linux_text_path: expands ~ to \$HOME" {
+    mkdir -p "$HOME"
+    local src="$HOME/tilde.png"
+    printf 'png-from-tilde' > "$src"
+    install_mock xclip "$(cat <<'EOF'
+for arg in "$@"; do
+    if [[ "$arg" == "TARGETS" ]]; then
+        printf 'UTF8_STRING\n'
+        exit 0
+    fi
+done
+printf '~/tilde.png'
+EOF
+)"
+    SOURCE_LINE=""
+    extract_linux_text_path
+    assert_equal "$(<"$TEMP_FILE")" "png-from-tilde"
+    assert_equal "$SOURCE_LINE" "source:path:$src"
+}
+
+@test "extract_linux_text_path: falls back to wl-paste when xclip is absent" {
+    # MOCK_BIN has no xclip; get_linux_clipboard_text takes the wl-paste branch.
+    local src="$TEST_TMP/wl.png"
+    printf 'png-from-wl' > "$src"
+    install_mock wl-paste "printf '%s' '$src'"
+    SOURCE_LINE=""
+    extract_linux_text_path
+    assert_equal "$(<"$TEMP_FILE")" "png-from-wl"
     assert_equal "$SOURCE_LINE" "source:path:$src"
 }

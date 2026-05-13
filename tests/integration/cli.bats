@@ -280,7 +280,10 @@ EOF
 
     run -0 "$CLIPSSH_BIN" -r /from/flag
     assert_file_contains "$TEST_TMP/ssh.script" "/from/flag"
-    refute [ -n "$(grep '/from/config' "$TEST_TMP/ssh.script" 2>/dev/null)" ]
+    # The configured value must NOT leak into the remote script — assert via
+    # grep's exit code so a regression produces a clear "grep matched" failure.
+    run grep -F '/from/config' "$TEST_TMP/ssh.script"
+    assert_failure
 }
 
 # --- --print-only ----------------------------------------------------------
@@ -292,7 +295,7 @@ EOF
 
     run -0 "$CLIPSSH_BIN" --print-only
     # Path goes to stdout, by itself, no "Uploaded:" banner.
-    [[ "$output" == /tmp/clipboard-* ]]
+    assert_output --regexp '^/tmp/clipboard-'
     refute_output --partial "Path copied"
     # And no xclip.copy file was produced.
     assert_file_not_exists "$TEST_TMP/xclip.copy"
@@ -333,6 +336,132 @@ EOF
     "$CLIPSSH_BIN" first@host >/dev/null
     run -0 "$CLIPSSH_BIN" different@host
     refute_output --partial "Tip:"
+}
+
+@test "CLI: nudge stays silent once the host is saved in config" {
+    install_xclip_with_recorder
+    install_ssh_recorder
+    "$CLIPSSH_BIN" config set host saved@host
+
+    # Three runs passing the same host that's already saved. The early-return
+    # in maybe_suggest_save_host should keep the tip suppressed indefinitely.
+    run -0 "$CLIPSSH_BIN" saved@host
+    refute_output --partial "Tip:"
+    run -0 "$CLIPSSH_BIN" saved@host
+    refute_output --partial "Tip:"
+    run -0 "$CLIPSSH_BIN" saved@host
+    refute_output --partial "Tip:"
+}
+
+# --- watch mode ------------------------------------------------------------
+
+# Stateful xclip: any image read returns the current contents of $STATE_FILE.
+# Lets a test drive the "clipboard" by rewriting that file mid-run.
+install_stateful_xclip() {
+    install_mock xclip "$(cat <<'EOF'
+state_file="$TEST_TMP/clipboard.state"
+# extract_linux_file_reference probes TARGETS / text/uri-list; fail both so
+# extract falls through to PASTE_CMD (the image read).
+for arg in "$@"; do
+    case "$arg" in
+        TARGETS|text/uri-list) exit 1 ;;
+    esac
+done
+# Plain text clipboard reads (extract_linux_text_path) shouldn't match an
+# image path — emit empty so that branch returns nonzero.
+if [[ "$*" != *"-target image/png"* ]]; then
+    exit 1
+fi
+if [[ -s "$state_file" ]]; then
+    cat "$state_file"
+else
+    exit 1
+fi
+EOF
+)"
+}
+
+# Per-upload-counting ssh mock: each call writes its stdin to a numbered file
+# so a test can prove exactly how many uploads ran and with what payload.
+install_counting_ssh() {
+    install_mock ssh "$(cat <<'EOF'
+counter="$TEST_TMP/ssh.counter"
+n=$(($(cat "$counter" 2>/dev/null || echo 0)+1))
+echo "$n" > "$counter"
+cat > "$TEST_TMP/ssh.stdin.$n"
+filename=$(printf '%s\n' "$@" | grep -oE 'PATH_FULL="\$DIR/[^"]+' | head -1 | sed 's|.*\$DIR/||')
+echo "/tmp/$filename"
+EOF
+)"
+}
+
+@test "CLI: watch mode uploads new clipboards and dedupes identical ones" {
+    install_stateful_xclip
+    install_counting_ssh
+    "$CLIPSSH_BIN" config set host target@remote
+
+    printf 'image-A' > "$TEST_TMP/clipboard.state"
+    "$CLIPSSH_BIN" --watch --interval 0.1 >/dev/null 2>&1 &
+    WATCH_PID=$!
+    sleep 1.0  # Many polls of image-A — only the first should upload.
+    printf 'image-B' > "$TEST_TMP/clipboard.state"
+    sleep 1.0  # Many polls of image-B — only the first should upload.
+    kill "$WATCH_PID" 2>/dev/null || true
+    wait "$WATCH_PID" 2>/dev/null || true
+
+    # Two uploads, in order, no third.
+    assert_file_exists "$TEST_TMP/ssh.stdin.1"
+    assert_file_exists "$TEST_TMP/ssh.stdin.2"
+    assert_file_not_exists "$TEST_TMP/ssh.stdin.3"
+    assert_file_contains "$TEST_TMP/ssh.stdin.1" "^image-A$"
+    assert_file_contains "$TEST_TMP/ssh.stdin.2" "^image-B$"
+}
+
+@test "CLI: watch mode survives a poll with no image (does not exit)" {
+    # xclip always exits 1: extract_clipboard_image will error() inside the
+    # iteration's subshell. Without the subshell isolation, the parent would
+    # exit and watch would die — `kill -0 $pid` would then fail.
+    install_mock xclip "exit 1"
+    install_ssh_recorder
+    "$CLIPSSH_BIN" config set host target@remote
+
+    "$CLIPSSH_BIN" --watch --interval 0.1 >/dev/null 2>&1 &
+    WATCH_PID=$!
+    sleep 0.5
+    run kill -0 "$WATCH_PID"
+    kill "$WATCH_PID" 2>/dev/null || true
+    wait "$WATCH_PID" 2>/dev/null || true
+    assert_success
+    # And no upload ever happened.
+    assert_file_not_exists "$TEST_TMP/ssh.stdin"
+}
+
+@test "CLI: watch mode does not retry the same hash after a failed upload" {
+    install_stateful_xclip
+    # ssh always fails: counts attempts but returns nonzero with no stdout.
+    install_mock ssh "$(cat <<'EOF'
+counter="$TEST_TMP/ssh.counter"
+n=$(($(cat "$counter" 2>/dev/null || echo 0)+1))
+echo "$n" > "$counter"
+cat > /dev/null
+echo "remote refused" >&2
+exit 1
+EOF
+)"
+    "$CLIPSSH_BIN" config set host target@remote
+    printf 'doomed' > "$TEST_TMP/clipboard.state"
+
+    "$CLIPSSH_BIN" --watch --interval 0.1 >/dev/null 2>&1 &
+    WATCH_PID=$!
+    sleep 0.8
+    kill "$WATCH_PID" 2>/dev/null || true
+    wait "$WATCH_PID" 2>/dev/null || true
+
+    # Exactly one ssh attempt — subsequent polls see the same hash as
+    # last_hash (recorded even on upload failure) and skip.
+    local n
+    n=$(cat "$TEST_TMP/ssh.counter" 2>/dev/null || echo 0)
+    [[ "$n" -eq 1 ]]
 }
 
 # --- setup wizard ----------------------------------------------------------

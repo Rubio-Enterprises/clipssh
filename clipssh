@@ -94,11 +94,17 @@ config_get() {
 config_set() {
     local key="$1" value="$2"
     mkdir -p "$CONFIG_DIR"
+    # Drop any existing line for $key and append a fresh one. Rewriting via
+    # grep+printf (rather than sed s|...|...|) keeps values containing sed
+    # metacharacters — | & \ — intact. The wizard now feeds arbitrary user
+    # input through here, so this matters.
     if [[ -f "$CONFIG_FILE" ]] && grep -q "^${key}=" "$CONFIG_FILE" 2>/dev/null; then
         local tmp="${CONFIG_FILE}.tmp"
-        sed "s|^${key}=.*|${key}=${value}|" "$CONFIG_FILE" > "$tmp" && mv "$tmp" "$CONFIG_FILE"
+        grep -v "^${key}=" "$CONFIG_FILE" > "$tmp" || true
+        printf '%s=%s\n' "$key" "$value" >> "$tmp"
+        mv "$tmp" "$CONFIG_FILE"
     else
-        echo "${key}=${value}" >> "$CONFIG_FILE"
+        printf '%s=%s\n' "$key" "$value" >> "$CONFIG_FILE"
     fi
 }
 
@@ -304,7 +310,10 @@ extract_linux_text_path() {
     text=$(trim_whitespace "$text")
     [[ -z "$text" ]] && return 1
     [[ "$text" == *$'\n'* ]] && return 1
-    if [[ "$text" =~ ^[\'\"](.+)[\'\"]$ ]]; then
+    # Match-paired only: the old `^[\'\"](.+)[\'\"]$` accepted mismatched
+    # quotes like `"foo'`. Bash regex has no backreferences, so we test the
+    # two cases explicitly.
+    if [[ "$text" =~ ^\"(.+)\"$ ]] || [[ "$text" =~ ^\'(.+)\'$ ]]; then
         text="${BASH_REMATCH[1]}"
     fi
     [[ "$text" == /* || "$text" == \~* ]] || return 1
@@ -387,14 +396,16 @@ format_source_label() {
 }
 
 # Bytes -> human string. wc -c is portable; numfmt isn't on macOS by default.
+# LC_ALL=C pins awk's %f to a `.` decimal point — gawk otherwise honours the
+# user's LC_NUMERIC and would emit `1,5 KB` under e.g. de_DE.
 human_size() {
     local bytes="$1"
     if (( bytes < 1024 )); then
         printf '%d B' "$bytes"
     elif (( bytes < 1024 * 1024 )); then
-        awk -v b="$bytes" 'BEGIN { printf "%.1f KB", b/1024 }'
+        LC_ALL=C awk -v b="$bytes" 'BEGIN { printf "%.1f KB", b/1024 }'
     else
-        awk -v b="$bytes" 'BEGIN { printf "%.1f MB", b/(1024*1024) }'
+        LC_ALL=C awk -v b="$bytes" 'BEGIN { printf "%.1f MB", b/(1024*1024) }'
     fi
 }
 
@@ -475,21 +486,43 @@ upload_and_report() {
     echo "Path copied to clipboard - paste it directly"
 }
 
+# sha1sum is GNU coreutils; macOS only ships `shasum` (Perl). Either gives us
+# a stable fingerprint of the temp file — we don't care which one runs.
+watch_hash() {
+    if command -v sha1sum >/dev/null 2>&1; then
+        sha1sum "$1" 2>/dev/null | cut -d' ' -f1
+    else
+        shasum "$1" 2>/dev/null | cut -d' ' -f1
+    fi
+}
+
 # Polls the clipboard at $WATCH_INTERVAL seconds and uploads each new image.
-# Skips repeats by tracking the previous upload's SHA-1; ignores "no image"
-# errors so the loop keeps running while the user goes about their day.
+# Skips repeats by tracking the previous upload's SHA-1.
+#
+# Robustness: acquire_image / upload_and_report can both call error() which
+# exits. We run them inside a subshell so the exit terminates the iteration,
+# not the whole watch. The subshell stashes the upload's hash in $HASH_FILE
+# (always, even on a failed upload) so the parent can advance last_hash —
+# this prevents the loop from spamming retries of a doomed upload until the
+# user copies something new.
 watch_loop() {
     local last_hash="" interval="${WATCH_INTERVAL:-2}"
     success "Watching clipboard on $HOST (interval ${interval}s). Ctrl-C to stop."
     while true; do
-        if acquire_image 2>/dev/null; then
-            local hash
-            hash=$(sha1sum "$TEMP_FILE" 2>/dev/null | cut -d' ' -f1)
-            if [[ -n "$hash" && "$hash" != "$last_hash" ]]; then
-                if upload_and_report; then
-                    last_hash="$hash"
-                fi
-            fi
+        : > "$HASH_FILE"
+        (
+            # Suppress acquire's stderr — "No image in clipboard" is the
+            # routine case when the clipboard holds text. Upload errors are
+            # left visible so real failures don't disappear.
+            acquire_image 2>/dev/null
+            [[ -s "$TEMP_FILE" ]] || exit 0
+            local hash; hash=$(watch_hash "$TEMP_FILE")
+            [[ -n "$hash" && "$hash" != "$last_hash" ]] || exit 0
+            printf '%s' "$hash" > "$HASH_FILE"
+            upload_and_report
+        ) || true
+        if [[ -s "$HASH_FILE" ]]; then
+            last_hash=$(<"$HASH_FILE")
         fi
         sleep "$interval"
     done
@@ -563,10 +596,21 @@ run_setup_wizard() {
     fi
 }
 
-should_offer_setup() {
+# True when nothing on the command line or environment suggests a non-interactive
+# intent — no host yet, no one-shot flags. Factored out from should_offer_setup
+# so it can be unit-tested without faking a TTY.
+setup_preconditions_met() {
     [[ -z "${HOST:-}" ]] || return 1
     [[ -z "${CLIPSSH_HOST:-}" ]] || return 1
     [[ -z "$(config_get host)" ]] || return 1
+    # Any explicit flag means the user expects an action, not a prompt.
+    [[ "$PRINT_ONLY" -eq 0 && "$WATCH" -eq 0 && -z "$FILE_SOURCE" ]] || return 1
+    [[ "${#SSH_OPTS[@]}" -eq 0 && -z "$REMOTE_DIR_OVERRIDE" ]] || return 1
+    return 0
+}
+
+should_offer_setup() {
+    setup_preconditions_met || return 1
     [[ -t 0 && -t 1 ]] || return 1
     return 0
 }
@@ -604,7 +648,8 @@ main() {
 
     TEMP_FILE=$(mktemp).png
     STDERR_FILE=$(mktemp)
-    trap 'rm -f "$TEMP_FILE" "$STDERR_FILE"' EXIT
+    HASH_FILE=$(mktemp)
+    trap 'rm -f "$TEMP_FILE" "$STDERR_FILE" "$HASH_FILE"' EXIT
 
     if [[ "$WATCH" -eq 1 ]]; then
         watch_loop
