@@ -41,8 +41,14 @@ install_linux() {
 
     if ! have kcov; then
         log "Building kcov from source (not packaged on Ubuntu 24.04)"
+        # libcurl/libelf/libiberty/libssl headers were trimmed in d1b1f0d on
+        # the assumption that local boxes had them already; on a fresh CI
+        # runner they're not preinstalled and kcov's coveralls writer fails
+        # to compile against the curl multipart API.
         sudo apt-get install -y --no-install-recommends \
-            cmake binutils-dev zlib1g-dev libdw-dev g++ ca-certificates curl
+            cmake g++ ca-certificates curl \
+            binutils-dev libcurl4-openssl-dev libdw-dev \
+            libelf-dev libiberty-dev libssl-dev zlib1g-dev
         # Use a script-scope variable so the EXIT trap can still see it after
         # install_linux returns (set -u would otherwise blow up on a function
         # local that's gone out of scope). EXIT (not RETURN) so cleanup runs
