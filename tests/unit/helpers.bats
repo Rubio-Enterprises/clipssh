@@ -87,6 +87,71 @@ teardown() {
     assert_equal "$HOST" "second@host"
 }
 
+@test "parse_args: -p / --port accumulates into SSH_OPTS" {
+    SSH_OPTS=()
+    parse_args -p 2222 user@host
+    assert_equal "${SSH_OPTS[0]}" "-p"
+    assert_equal "${SSH_OPTS[1]}" "2222"
+    assert_equal "$HOST" "user@host"
+}
+
+@test "parse_args: -i / --identity accumulates into SSH_OPTS" {
+    SSH_OPTS=()
+    parse_args -i /tmp/key user@host
+    assert_equal "${SSH_OPTS[0]}" "-i"
+    assert_equal "${SSH_OPTS[1]}" "/tmp/key"
+}
+
+@test "parse_args: -o options can be repeated" {
+    SSH_OPTS=()
+    parse_args -o StrictHostKeyChecking=no -o ConnectTimeout=5
+    assert_equal "${#SSH_OPTS[@]}" "4"
+    assert_equal "${SSH_OPTS[1]}" "StrictHostKeyChecking=no"
+    assert_equal "${SSH_OPTS[3]}" "ConnectTimeout=5"
+}
+
+@test "parse_args: -p without a value errors" {
+    run -1 parse_args -p
+    assert_output --partial "Missing value for -p"
+}
+
+@test "parse_args: -f / --file sets FILE_SOURCE" {
+    FILE_SOURCE=""
+    parse_args -f /tmp/photo.png user@host
+    assert_equal "$FILE_SOURCE" "/tmp/photo.png"
+    assert_equal "$HOST" "user@host"
+}
+
+@test "parse_args: -r / --remote-dir sets REMOTE_DIR_OVERRIDE" {
+    REMOTE_DIR_OVERRIDE=""
+    parse_args --remote-dir /var/uploads user@host
+    assert_equal "$REMOTE_DIR_OVERRIDE" "/var/uploads"
+}
+
+@test "parse_args: -P / --print-only sets PRINT_ONLY=1" {
+    PRINT_ONLY=0
+    parse_args --print-only user@host
+    assert_equal "$PRINT_ONLY" "1"
+}
+
+@test "parse_args: -w / --watch sets WATCH=1" {
+    WATCH=0
+    parse_args -w user@host
+    assert_equal "$WATCH" "1"
+}
+
+@test "parse_args: --interval sets WATCH_INTERVAL" {
+    WATCH_INTERVAL=2
+    parse_args --interval 7 user@host
+    assert_equal "$WATCH_INTERVAL" "7"
+}
+
+@test "parse_args: HOST_FROM_CLI tracks the positional host" {
+    HOST_FROM_CLI=""
+    parse_args cli@host
+    assert_equal "$HOST_FROM_CLI" "cli@host"
+}
+
 # --- resolve_host -----------------------------------------------------------
 
 @test "resolve_host: prefers an already-set HOST (CLI arg) over env and config" {
@@ -157,8 +222,14 @@ teardown() {
 
 # --- compute_remote_filename ------------------------------------------------
 
-@test "compute_remote_filename: returns generic name on linux" {
-    run compute_remote_filename 1700000000 "source:file:/x.png"
+@test "compute_remote_filename: uses file basename for source:file: on linux" {
+    run compute_remote_filename 1700000000 "source:file:/home/me/diagram.png"
+    assert_success
+    assert_output "diagram-1700000000.png"
+}
+
+@test "compute_remote_filename: falls back to 'clipboard' on linux when source is unknown" {
+    run compute_remote_filename 1700000000 ""
     assert_success
     assert_output "clipboard-1700000000.png"
 }
@@ -248,6 +319,118 @@ teardown() {
     assert_output "/env/dir"
 }
 
+@test "resolve_remote_dir: --remote-dir override beats env and config" {
+    config_set remote_dir /from/config
+    REMOTE_DIR_OVERRIDE=/from/flag CLIPSSH_REMOTE_DIR=/from/env \
+        run resolve_remote_dir
+    assert_success
+    assert_output "/from/flag"
+}
+
+# --- make_timestamp ---------------------------------------------------------
+
+@test "make_timestamp: produces a sortable UTC stamp" {
+    run make_timestamp
+    assert_success
+    # Must be the ISO form (YYYYMMDDTHHMMSSZ) — the epoch-seconds fallback is
+    # only there for busybox `date`, which we don't bless as a supported env.
+    [[ "$output" =~ ^[0-9]{8}T[0-9]{6}Z$ ]]
+}
+
+# --- format_source_label ----------------------------------------------------
+
+@test "format_source_label: image -> 'screenshot'" {
+    run format_source_label "source:image"
+    assert_output "screenshot"
+}
+
+@test "format_source_label: file -> 'file: <path>'" {
+    run format_source_label "source:file:/tmp/x.png"
+    assert_output "file: /tmp/x.png"
+}
+
+@test "format_source_label: path -> 'path: <path>'" {
+    run format_source_label "source:path:/home/x.png"
+    assert_output "path: /home/x.png"
+}
+
+@test "format_source_label: empty -> 'clipboard'" {
+    run format_source_label ""
+    assert_output "clipboard"
+}
+
+# --- human_size -------------------------------------------------------------
+
+@test "human_size: bytes under 1 KB stay in bytes" {
+    run human_size 512
+    assert_output "512 B"
+}
+
+@test "human_size: medium values format as KB" {
+    run human_size 4096
+    assert_output "4.0 KB"
+}
+
+@test "human_size: large values format as MB" {
+    run human_size 1572864
+    assert_output "1.5 MB"
+}
+
+@test "human_size: uses '.' as the decimal point under non-C locales" {
+    # Without the LC_ALL=C pin inside human_size, gawk would emit `1,5 MB`
+    # when the user's locale uses a comma as decimal separator. We don't
+    # know whether de_DE is installed on the runner, but the assertion is
+    # one-sided: there must NEVER be a comma.
+    LC_ALL=de_DE.UTF-8 run human_size 1572864
+    refute_output --partial ","
+    assert_output --partial "."
+}
+
+# --- is_supported_image_path ------------------------------------------------
+
+@test "is_supported_image_path: accepts common image extensions case-insensitively" {
+    run is_supported_image_path /tmp/x.PNG
+    assert_success
+    run is_supported_image_path /tmp/x.jpeg
+    assert_success
+    run is_supported_image_path /tmp/x.webp
+    assert_success
+}
+
+@test "is_supported_image_path: rejects non-images" {
+    run is_supported_image_path /tmp/notes.txt
+    assert_failure
+    run is_supported_image_path /tmp/noext
+    assert_failure
+}
+
+# --- load_from_file_source --------------------------------------------------
+
+@test "load_from_file_source: copies the file into TEMP_FILE and sets SOURCE_LINE" {
+    TEMP_FILE="$TEST_TMP/dest.png"
+    : > "$TEMP_FILE"
+    local src="$TEST_TMP/photo.png"
+    printf 'pretend-png' > "$src"
+    SOURCE_LINE=""
+    load_from_file_source "$src"
+    assert_equal "$(<"$TEMP_FILE")" "pretend-png"
+    assert_equal "$SOURCE_LINE" "source:file:$src"
+}
+
+@test "load_from_file_source: errors when file is missing" {
+    TEMP_FILE="$TEST_TMP/dest.png"
+    run -1 load_from_file_source "$TEST_TMP/does-not-exist.png"
+    assert_output --partial "File not found"
+}
+
+@test "load_from_file_source: errors when file is empty" {
+    TEMP_FILE="$TEST_TMP/dest.png"
+    local src="$TEST_TMP/empty.png"
+    : > "$src"
+    run -1 load_from_file_source "$src"
+    assert_output --partial "File is empty"
+}
+
 # --- copy_to_local_clipboard ------------------------------------------------
 
 @test "copy_to_local_clipboard: pipes to xclip on linux when available" {
@@ -272,4 +455,143 @@ teardown() {
     run copy_to_local_clipboard "ignored"
     assert_success
     assert_output ""
+}
+
+# --- config_set special-character handling ---------------------------------
+
+@test "config_set: preserves '|' on update (the old sed delimiter would corrupt this)" {
+    config_set host "initial@host"
+    config_set host "user@host|alt"
+    assert_equal "$(config_get host)" "user@host|alt"
+}
+
+@test "config_set: preserves '&' on update (sed replacement would re-expand it)" {
+    config_set remote_dir "/tmp/before"
+    config_set remote_dir "/tmp/a&b"
+    assert_equal "$(config_get remote_dir)" "/tmp/a&b"
+}
+
+@test "config_set: preserves backslashes on update" {
+    config_set host "initial@host"
+    config_set host 'user@host\name'
+    assert_equal "$(config_get host)" 'user@host\name'
+}
+
+@test "config_set: overwrites instead of duplicating on repeat" {
+    config_set host "first@host"
+    config_set host "second@host"
+    # Only one host= line should remain in the config file.
+    local count
+    count=$(grep -c '^host=' "$XDG_CONFIG_HOME/clipssh/config")
+    assert_equal "$count" "1"
+    assert_equal "$(config_get host)" "second@host"
+}
+
+# --- setup_preconditions_met (TTY-independent half of should_offer_setup) --
+
+@test "setup_preconditions_met: returns 0 when nothing is configured and no flags are set" {
+    HOST=""
+    unset CLIPSSH_HOST
+    PRINT_ONLY=0
+    WATCH=0
+    FILE_SOURCE=""
+    SSH_OPTS=()
+    REMOTE_DIR_OVERRIDE=""
+    run setup_preconditions_met
+    assert_success
+}
+
+@test "setup_preconditions_met: returns 1 when HOST is set (CLI host given)" {
+    HOST="cli@host"
+    run setup_preconditions_met
+    assert_failure
+}
+
+@test "setup_preconditions_met: returns 1 when CLIPSSH_HOST is set" {
+    HOST=""
+    CLIPSSH_HOST="env@host" run setup_preconditions_met
+    assert_failure
+}
+
+@test "setup_preconditions_met: returns 1 when host is saved in config" {
+    HOST=""
+    config_set host "config@host"
+    run setup_preconditions_met
+    assert_failure
+}
+
+@test "setup_preconditions_met: returns 1 when --print-only was passed" {
+    HOST=""
+    PRINT_ONLY=1
+    WATCH=0
+    FILE_SOURCE=""
+    SSH_OPTS=()
+    REMOTE_DIR_OVERRIDE=""
+    run setup_preconditions_met
+    assert_failure
+}
+
+@test "setup_preconditions_met: returns 1 when --watch was passed" {
+    HOST=""
+    PRINT_ONLY=0
+    WATCH=1
+    FILE_SOURCE=""
+    SSH_OPTS=()
+    REMOTE_DIR_OVERRIDE=""
+    run setup_preconditions_met
+    assert_failure
+}
+
+@test "setup_preconditions_met: returns 1 when --file was passed" {
+    HOST=""
+    PRINT_ONLY=0
+    WATCH=0
+    FILE_SOURCE="/tmp/x.png"
+    SSH_OPTS=()
+    REMOTE_DIR_OVERRIDE=""
+    run setup_preconditions_met
+    assert_failure
+}
+
+@test "setup_preconditions_met: returns 1 when ssh options were passed" {
+    HOST=""
+    PRINT_ONLY=0
+    WATCH=0
+    FILE_SOURCE=""
+    SSH_OPTS=(-p 2222)
+    REMOTE_DIR_OVERRIDE=""
+    run setup_preconditions_met
+    assert_failure
+}
+
+@test "setup_preconditions_met: returns 1 when --remote-dir was passed" {
+    HOST=""
+    PRINT_ONLY=0
+    WATCH=0
+    FILE_SOURCE=""
+    SSH_OPTS=()
+    REMOTE_DIR_OVERRIDE="/var/uploads"
+    run setup_preconditions_met
+    assert_failure
+}
+
+# --- watch_hash -------------------------------------------------------------
+
+@test "watch_hash: returns a fingerprint of the file" {
+    local f="$TEST_TMP/x.bin"
+    printf 'abc' > "$f"
+    run watch_hash "$f"
+    assert_success
+    # SHA-1("abc") = a9993e364706816aba3e25717850c26c9cd0d89d
+    assert_output "a9993e364706816aba3e25717850c26c9cd0d89d"
+}
+
+@test "watch_hash: returns a different digest for different bytes" {
+    local a="$TEST_TMP/a.bin" b="$TEST_TMP/b.bin"
+    printf 'one' > "$a"
+    printf 'two' > "$b"
+    local ha hb
+    ha=$(watch_hash "$a")
+    hb=$(watch_hash "$b")
+    [[ -n "$ha" && -n "$hb" && "$ha" != "$hb" ]]
 }

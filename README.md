@@ -27,17 +27,42 @@ clipssh user@myserver
 # The image will auto-attach
 ```
 
-### Supported Clipboard Sources (macOS)
+### Common flags
 
-- **Screenshot to clipboard** — `Cmd+Shift+Ctrl+4` (select area)
-- **Copy file in Finder** — right-click an image file → Copy
-- **Copy file path** — right-click an image file → Copy Path
+```bash
+clipssh -p 2222 -i ~/.ssh/id_ed25519 user@server   # SSH options passed through
+clipssh -f ~/Desktop/diagram.png user@server       # upload a specific file
+clipssh -r ~/uploads user@server                   # one-shot remote dir override
+clipssh --print-only user@server                   # print path; leave clipboard alone
+clipssh --watch user@server                        # watch clipboard, upload on change
+```
 
-All three methods are detected automatically.
+### Supported clipboard sources
+
+| Source                                                  | macOS | Linux |
+| ------------------------------------------------------- | :---: | :---: |
+| Screenshot to clipboard (`Cmd+Shift+Ctrl+4` / `Print`)  |  yes  |  yes  |
+| Copy file in Finder / Nautilus / Dolphin                |  yes  |  yes  |
+| Copy file path as plain text                            |  yes  |  yes  |
+
+All sources are detected automatically.
+
+### Watch mode
+
+`clipssh --watch` polls the clipboard at a configurable interval (default 2s)
+and uploads any new image as soon as it appears — take a screenshot and the
+remote path is already on your clipboard. Override the interval with
+`--interval SECONDS`. Ctrl-C to stop.
 
 ## Configuration
 
-Configure defaults with `clipssh config`:
+First-time setup is interactive:
+
+```bash
+clipssh setup
+```
+
+Or configure directly:
 
 ```bash
 # Set default host
@@ -55,6 +80,11 @@ clipssh config list
 
 Settings are stored in `~/.config/clipssh/config`.
 
+> **Note on `/tmp`**: the default remote directory is `/tmp`, which some
+> distros clear on reboot or periodically (e.g. `systemd-tmpfiles`). For
+> images you want to keep, configure a durable directory:
+> `clipssh config set remote_dir ~/.cache/clipssh`.
+
 Environment variables override the config file for per-session use:
 
 ```bash
@@ -63,6 +93,25 @@ CLIPSSH_REMOTE_DIR=/custom/path clipssh
 ```
 
 **Precedence:** CLI arguments > environment variables > config file > defaults.
+
+## Hotkey integration
+
+`clipssh` becomes much faster to use with a global hotkey — take a screenshot,
+press a key, and the path is on your clipboard ready to paste.
+
+**macOS (Raycast):** create a Script Command pointing at `clipssh --watch`,
+or bind a Quicklink that runs `clipssh user@server`.
+
+**macOS (Alfred):** add a Workflow → Hotkey Trigger → Run Script:
+`/opt/homebrew/bin/clipssh user@server`.
+
+**macOS (skhd):** in `~/.config/skhd/skhdrc`:
+
+```text
+cmd + shift + ctrl - v : /opt/homebrew/bin/clipssh user@server
+```
+
+**Linux (sxhkd / GNOME / KDE):** bind a key to `clipssh user@server`.
 
 ## Requirements
 
