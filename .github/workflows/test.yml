@@ -16,10 +16,15 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      - name: Install Task
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Install dependencies
-        run: make setup
+        run: task setup
       - name: Lint + tests + coverage floor
-        run: make check
+        run: task check
       - name: Upload coverage HTML report
         if: always()
         uses: actions/upload-artifact@v4

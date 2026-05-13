@@ -1,19 +1,37 @@
 #!/usr/bin/env bash
 #
-# Installs bats + bats-assert/file/support, shellcheck, jq, kcov.
-# Idempotent; invoked by `make setup` from both CI and local dev.
+# Installs Task + bats + bats-assert/file/support, shellcheck, jq, kcov.
+# Idempotent; invoked by `task setup` from both CI and local dev.
 
 set -euo pipefail
 
 log() { printf '\033[0;32m==>\033[0m %s\n' "$*"; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
-if have bats && have shellcheck && have jq && have kcov; then
+# Task lives outside the test-tooling set because it bootstraps the rest. If
+# it's already on PATH we leave it alone; otherwise install via the official
+# script into ~/.local/bin (no sudo) and let the user prepend it to PATH.
+install_task() {
+    if have task; then
+        return
+    fi
+    log "Installing Task (go-task) into ~/.local/bin"
+    mkdir -p "$HOME/.local/bin"
+    curl -fsSL https://taskfile.dev/install.sh | sh -s -- -b "$HOME/.local/bin"
+    case ":$PATH:" in
+        *":$HOME/.local/bin:"*) ;;
+        *) log "Add \$HOME/.local/bin to your PATH to use 'task'." ;;
+    esac
+}
+
+if have task && have bats && have shellcheck && have jq && have kcov; then
     log "All dependencies already installed"
     exit 0
 fi
 
 install_linux() {
+    install_task
+
     log "Installing apt packages"
     sudo apt-get update -qq
     sudo apt-get install -y --no-install-recommends \
@@ -44,6 +62,7 @@ install_macos() {
     fi
     log "Installing Homebrew packages"
     brew install --quiet \
+        go-task \
         bats-core \
         bats-assert \
         bats-file \
@@ -63,7 +82,7 @@ case "$(uname -s)" in
 esac
 
 log "Done. Installed:"
-for tool in bats shellcheck jq kcov; do
+for tool in task bats shellcheck jq kcov; do
     if have "$tool"; then
         printf "  %-12s %s\n" "$tool" "$("$tool" --version 2>&1 | head -1)"
     else

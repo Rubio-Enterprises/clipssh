@@ -1,0 +1,90 @@
+version: '3'
+
+vars:
+  COVERAGE_FLOOR: '{{.COVERAGE_FLOOR | default "80"}}'
+  COVERAGE_JSON: '{{.COVERAGE_JSON | default "coverage/bats/coverage.json"}}'
+
+tasks:
+  default:
+    desc: Show available tasks
+    cmds:
+      - task --list
+
+  setup:
+    desc: Install bats, shellcheck, jq, kcov (Linux/macOS)
+    cmds:
+      - ./script/bootstrap
+
+  # Verify the tools `test` and `check` need. Printing a single clear message
+  # beats letting `bats` fail with "command not found".
+  check-prereqs:
+    internal: true
+    silent: true
+    cmds:
+      - |
+        missing=
+        for t in bats shellcheck jq kcov; do
+          command -v "$t" >/dev/null 2>&1 || missing="$missing $t"
+        done
+        if [ -n "$missing" ]; then
+          echo "Missing tools:$missing"
+          echo "Run 'task setup' to install them."
+          exit 1
+        fi
+
+  test:
+    desc: Run the shell test suite (bats)
+    deps: [test-shell]
+
+  test-shell:
+    desc: Run the shell test suite (bats)
+    deps: [check-prereqs]
+    cmds:
+      - bats tests/unit tests/integration
+
+  test-swift:
+    desc: Run the Swift unit tests (macOS only)
+    dir: swift
+    cmds:
+      - task: test
+
+  test-coverage:
+    desc: Run shell tests under kcov and print summary
+    deps: [check-prereqs]
+    cmds:
+      - rm -rf coverage
+      - mkdir -p coverage
+      - kcov --include-path={{.TASKFILE_DIR}}/clipssh coverage bats tests/unit tests/integration
+      - jq -r '.files[] | "\(.percent_covered)%  \(.file)"' {{.COVERAGE_JSON}}
+
+  check-coverage:
+    desc: Run test-coverage and fail if below COVERAGE_FLOOR%
+    deps: [test-coverage]
+    silent: true
+    cmds:
+      - |
+        pct=$(jq -r '.files[] | select(.file|endswith("/clipssh")).percent_covered' {{.COVERAGE_JSON}})
+        echo "clipssh coverage: $pct% (floor: {{.COVERAGE_FLOOR}}%)"
+        awk "BEGIN{exit !($pct >= {{.COVERAGE_FLOOR}})}"
+
+  check:
+    desc: Lint + check-coverage (what CI runs)
+    cmds:
+      - task: lint
+      - task: check-coverage
+
+  lint:
+    desc: Run shellcheck against clipssh
+    cmds:
+      - shellcheck clipssh script/bootstrap
+
+  clean:
+    desc: Remove coverage and build artifacts
+    cmds:
+      - rm -rf coverage build
+      - task: swift:clean
+
+includes:
+  swift:
+    taskfile: ./swift/Taskfile.yml
+    dir: ./swift

@@ -1,6 +1,6 @@
 # Tests
 
-Two layers, run together by `make test`:
+Two layers, run together by `task test`:
 
 - **`tests/unit/`** — bats tests that `source` `clipssh` and exercise functions
   directly. Fast, no subprocesses unless explicitly mocked.
@@ -28,11 +28,11 @@ entry point. See the `BASH_SOURCE` guard at the bottom of `clipssh`.
 ## Running
 
 ```
-make test            # bats only (fast feedback)
-make test-coverage   # bats + kcov, prints per-file coverage
-make lint            # shellcheck
-make test-swift      # Swift XCTests (requires macOS / Xcode)
-make check           # what CI runs: lint + tests + coverage floor
+task test            # bats only (fast feedback)
+task test-coverage   # bats + kcov, prints per-file coverage
+task lint            # shellcheck
+task test-swift      # Swift XCTests (requires macOS / Xcode)
+task check           # what CI runs: lint + tests + coverage floor
 ```
 
 ## Coverage

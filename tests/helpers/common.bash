@@ -39,7 +39,7 @@ load_bats_libs() {
         || ! declare -F assert_file_exists >/dev/null; then
         echo "common.bash: bats-assert / bats-file not found." >&2
         echo "  Searched: $BATS_LIB_PATH" >&2
-        echo "  Run 'make setup' to install them." >&2
+        echo "  Run 'task setup' to install them." >&2
         exit 1
     fi
 }
