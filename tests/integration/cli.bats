@@ -412,19 +412,16 @@ EOF
 
     # Debug dump on failure
     if [[ ! -f "$TEST_TMP/ssh.stdin.1" ]]; then
-        echo "--- watch.debug ---" >&3
-        cat "$TEST_TMP/watch.debug" >&3 2>/dev/null || echo "(no debug file)" >&3
-        echo "--- watch.stdout ---" >&3
-        cat "$TEST_TMP/watch.stdout" >&3 2>/dev/null
-        echo "--- watch.stderr ---" >&3
-        cat "$TEST_TMP/watch.stderr" >&3 2>/dev/null
-        echo "--- clipboard.state ---" >&3
-        cat "$TEST_TMP/clipboard.state" >&3 2>/dev/null
-        echo "--- ls TEST_TMP ---" >&3
-        ls -la "$TEST_TMP" >&3 2>/dev/null
-        echo "--- OSTYPE in test = $OSTYPE ---" >&3
-        echo "--- bash --version ---" >&3
-        bash --version >&3 2>&1
+        echo "--- xclip mock content (od -c) ---" >&3
+        od -c "$MOCK_BIN/xclip" >&3 2>/dev/null
+        echo "--- direct mock invocation ---" >&3
+        "$MOCK_BIN/xclip" -selection clipboard -target image/png -o >"$TEST_TMP/mock.out" 2>"$TEST_TMP/mock.err"
+        echo "mock rc=$?" >&3
+        echo "stdout: $(cat "$TEST_TMP/mock.out")" >&3
+        echo "stderr: $(cat "$TEST_TMP/mock.err")" >&3
+        echo "--- bash versions ---" >&3
+        /bin/bash --version >&3 2>&1 | head -1
+        /usr/bin/env bash --version >&3 2>&1 | head -1
     fi
 
     # Two uploads, in order, no third.
