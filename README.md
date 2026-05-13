@@ -82,6 +82,15 @@ CLIPSSH_REMOTE_DIR=/custom/path clipssh
 4. Copies the remote path to your clipboard
 5. You paste the path into Claude Code, which reads and displays the image
 
+## Development
+
+```bash
+task setup   # installs Task, bats, shellcheck, jq, kcov (Linux + macOS)
+task check   # exact pipeline CI runs: lint + tests + 80% coverage floor
+```
+
+See [tests/README.md](tests/README.md) for the layout of the test suite.
+
 ## License
 
 MIT

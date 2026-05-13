@@ -14,4 +14,7 @@ Vagrantfile
 !.vm/worktree-setup.sh
 # END agent-sandbox managed
 build/
+coverage/
+swift/.build/
+swift/.swiftpm/
 docs/superpowers/

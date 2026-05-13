@@ -1,4 +1,5 @@
 import AppKit
+import ClipsshPasteCore
 import Foundation
 
 let version = "1.0.0"
@@ -45,18 +46,12 @@ if CommandLine.arguments.contains("--version") || CommandLine.arguments.contains
     exit(0)
 }
 
-let supportedExtensions = Set(["png", "jpg", "jpeg", "gif", "tiff", "bmp", "webp"])
-
 let pasteboard = NSPasteboard.general
 
 // Check if pasteboard has any content at all
 let items = pasteboard.pasteboardItems
 if items == nil || items?.isEmpty == true {
     exitWithError("No content found in clipboard")
-}
-
-func isImageExtension(_ ext: String) -> Bool {
-    return supportedExtensions.contains(ext.lowercased())
 }
 
 func writePNGToStdout(_ pngData: Data, source: String) -> Never {
@@ -73,7 +68,7 @@ func convertToPNG(_ data: Data) -> Data? {
     return pngData
 }
 
-func fileToStdoutPNG(path: String, sourcePrefix: String) -> Never {
+func fileToStdoutPNG(path: String, source: ClipsshPasteCore.Source) -> Never {
     let url = URL(fileURLWithPath: path)
     guard let data = try? Data(contentsOf: url) else {
         exitWithError("Failed to read image file: \(path)")
@@ -81,7 +76,7 @@ func fileToStdoutPNG(path: String, sourcePrefix: String) -> Never {
     guard let pngData = convertToPNG(data) else {
         exitWithError("Failed to convert image to PNG")
     }
-    writePNGToStdout(pngData, source: "\(sourcePrefix)\(path)")
+    writePNGToStdout(pngData, source: ClipsshPasteCore.sourceMarker(source))
 }
 
 // --- Detection 1: File references ---
@@ -95,11 +90,11 @@ func tryFileReference() {
         let resolvedPath = resolved.path
         let ext = resolved.pathExtension
 
-        guard isImageExtension(ext) else {
+        guard ClipsshPasteCore.isImageExtension(ext) else {
             exitWithError("Copied file is not a supported image type: \(resolvedPath)", code: 2)
         }
 
-        fileToStdoutPNG(path: resolvedPath, sourcePrefix: "source:file:")
+        fileToStdoutPNG(path: resolvedPath, source: .file(resolvedPath))
     }
 }
 
@@ -117,12 +112,12 @@ func tryRawImageData() {
         if let data = pasteboard.data(forType: type) {
             if type == .png {
                 // PNG data can be written directly without re-encoding
-                writePNGToStdout(data, source: "source:image")
+                writePNGToStdout(data, source: ClipsshPasteCore.sourceMarker(.image))
             }
             guard let pngData = convertToPNG(data) else {
                 continue
             }
-            writePNGToStdout(pngData, source: "source:image")
+            writePNGToStdout(pngData, source: ClipsshPasteCore.sourceMarker(.image))
         }
     }
 }
@@ -135,35 +130,20 @@ func tryTextPath() {
         return
     }
 
-    // Must be a single line
-    var trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !trimmed.contains("\n") else {
+    guard let expanded = ClipsshPasteCore.normalizeClipboardPath(text) else {
         return
     }
 
-    // Strip surrounding quotes (Finder's "Copy as Pathname" wraps paths in single quotes)
-    if (trimmed.hasPrefix("'") && trimmed.hasSuffix("'")) ||
-       (trimmed.hasPrefix("\"") && trimmed.hasSuffix("\"")) {
-        trimmed = String(trimmed.dropFirst().dropLast())
-    }
-
-    // Must start with / or ~
-    guard trimmed.hasPrefix("/") || trimmed.hasPrefix("~") else {
-        return
-    }
-
-    // Expand ~ to home directory
-    let expanded = NSString(string: trimmed).expandingTildeInPath
     let ext = URL(fileURLWithPath: expanded).pathExtension
 
-    guard isImageExtension(ext) else {
+    guard ClipsshPasteCore.isImageExtension(ext) else {
         if !ext.isEmpty {
             exitWithError("Path is not a supported image type: \(expanded)", code: 2)
         }
         return
     }
 
-    fileToStdoutPNG(path: expanded, sourcePrefix: "source:path:")
+    fileToStdoutPNG(path: expanded, source: .path(expanded))
 }
 
 tryTextPath()

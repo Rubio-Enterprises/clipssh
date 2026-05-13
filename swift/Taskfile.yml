@@ -1,0 +1,28 @@
+version: '3'
+
+vars:
+  BUILD_DIR: '{{.BUILD_DIR | default "../build"}}'
+
+tasks:
+  default:
+    desc: Show available tasks
+    cmds:
+      - task --list
+
+  build:
+    desc: Build clipssh-paste release binary and copy to BUILD_DIR
+    cmds:
+      - mkdir -p {{.BUILD_DIR}}
+      - swift build -c release
+      - cp "$(swift build -c release --show-bin-path)/clipssh-paste" {{.BUILD_DIR}}/clipssh-paste
+
+  test:
+    desc: Run Swift XCTest suite
+    cmds:
+      - swift test
+
+  clean:
+    desc: Remove Swift build artifacts
+    cmds:
+      - swift package clean
+      - rm -rf .build {{.BUILD_DIR}}

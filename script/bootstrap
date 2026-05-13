@@ -1,0 +1,119 @@
+#!/usr/bin/env bash
+#
+# Installs Task + bats + bats-assert/file/support, shellcheck, jq, kcov.
+# Idempotent; invoked by `task setup` from both CI and local dev.
+
+set -euo pipefail
+
+log() { printf '\033[0;32m==>\033[0m %s\n' "$*"; }
+have() { command -v "$1" >/dev/null 2>&1; }
+
+# Task lives outside the test-tooling set because it bootstraps the rest. If
+# it's already on PATH we leave it alone; otherwise install via the official
+# script into ~/.local/bin (no sudo) and let the user prepend it to PATH.
+install_task() {
+    if have task; then
+        return
+    fi
+    log "Installing Task (go-task) into ~/.local/bin"
+    mkdir -p "$HOME/.local/bin"
+    curl -fsSL https://taskfile.dev/install.sh | sh -s -- -b "$HOME/.local/bin"
+    case ":$PATH:" in
+        *":$HOME/.local/bin:"*) ;;
+        *) log "Add \$HOME/.local/bin to your PATH to use 'task'." ;;
+    esac
+}
+
+if have task && have bats && have shellcheck && have jq && have kcov; then
+    log "All dependencies already installed"
+    exit 0
+fi
+
+install_linux() {
+    install_task
+
+    log "Installing apt packages"
+    sudo apt-get update -qq
+    sudo apt-get install -y --no-install-recommends \
+        bats bats-assert bats-file bats-support \
+        shellcheck \
+        jq
+
+    if ! have kcov; then
+        log "Building kcov from source (not packaged on Ubuntu 24.04)"
+        # libcurl/libelf/libiberty/libssl headers were trimmed in d1b1f0d on
+        # the assumption that local boxes had them already; on a fresh CI
+        # runner they're not preinstalled and kcov's coveralls writer fails
+        # to compile against the curl multipart API.
+        sudo apt-get install -y --no-install-recommends \
+            cmake g++ ca-certificates curl \
+            binutils-dev libcurl4-openssl-dev libdw-dev \
+            libelf-dev libiberty-dev libssl-dev zlib1g-dev
+        # Use a script-scope variable so the EXIT trap can still see it after
+        # install_linux returns (set -u would otherwise blow up on a function
+        # local that's gone out of scope). EXIT (not RETURN) so cleanup runs
+        # even if a build step aborts under set -e.
+        KCOV_BUILD_TMP=$(mktemp -d)
+        trap 'rm -rf "${KCOV_BUILD_TMP:-}"' EXIT
+        curl -fsSL https://github.com/SimonKagstrom/kcov/archive/v42.tar.gz \
+            | tar xz -C "$KCOV_BUILD_TMP"
+        cmake -S "$KCOV_BUILD_TMP/kcov-42" -B "$KCOV_BUILD_TMP/kcov-42/build" > /dev/null
+        make -C "$KCOV_BUILD_TMP/kcov-42/build" -j"$(nproc)" > /dev/null
+        sudo make -C "$KCOV_BUILD_TMP/kcov-42/build" install > /dev/null
+    fi
+}
+
+install_bats_lib() {
+    # bats-support / bats-assert / bats-file aren't on Homebrew. Pin each
+    # to a tagged release and check it out into $(brew --prefix)/lib so
+    # load_bats_libs (which already searches /usr/local/lib and
+    # /opt/homebrew/lib) discovers them.
+    local repo="$1" tag="$2" prefix
+    prefix="$(brew --prefix)/lib"
+    local dest="$prefix/$repo"
+    if [ -d "$dest/.git" ]; then
+        git -C "$dest" fetch --quiet --depth=1 origin "refs/tags/$tag"
+        git -C "$dest" reset --quiet --hard FETCH_HEAD
+    else
+        mkdir -p "$prefix"
+        git clone --quiet --depth=1 --branch "$tag" \
+            "https://github.com/bats-core/$repo.git" "$dest"
+    fi
+}
+
+install_macos() {
+    if ! have brew; then
+        echo "Homebrew is required. Install from https://brew.sh." >&2
+        exit 1
+    fi
+    log "Installing Homebrew packages"
+    brew install --quiet \
+        go-task \
+        bats-core \
+        shellcheck \
+        jq \
+        kcov
+
+    log "Installing bats helper libraries from source"
+    install_bats_lib bats-support v0.3.0
+    install_bats_lib bats-assert  v2.1.0
+    install_bats_lib bats-file    v0.4.0
+}
+
+case "$(uname -s)" in
+    Linux)  install_linux ;;
+    Darwin) install_macos ;;
+    *)
+        echo "Unsupported OS: $(uname -s)" >&2
+        exit 1
+        ;;
+esac
+
+log "Done. Installed:"
+for tool in task bats shellcheck jq kcov; do
+    if have "$tool"; then
+        printf "  %-12s %s\n" "$tool" "$("$tool" --version 2>&1 | head -1)"
+    else
+        printf "  %-12s (missing)\n" "$tool"
+    fi
+done
