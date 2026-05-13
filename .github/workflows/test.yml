@@ -27,10 +27,18 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Install dependencies
         run: task setup
-      - name: Lint + tests + coverage floor
-        run: task check
+      - name: Lint + tests
+        run: task lint test-shell
+      - name: Coverage floor (Linux only)
+        # kcov's macOS backend uses lldb-based process tracing, which hangs
+        # when run against bats in CI (kcov issue #458 and related). Switching
+        # to --bash-method=PS4 sidesteps the bats DEBUG-trap collision but the
+        # underlying lldb attach still stalls. Linux is the authoritative
+        # coverage reading; macOS still runs lint + the full bats suite.
+        if: matrix.os == 'ubuntu-latest'
+        run: task check-coverage
       - name: Upload coverage HTML report
-        if: always()
+        if: always() && matrix.os == 'ubuntu-latest'
         uses: actions/upload-artifact@v4
         with:
           name: coverage-report-${{ matrix.os }}

@@ -43,6 +43,11 @@ the `clipssh` script. The `check-coverage` target enforces a floor of
 of "uncovered" lines are continuation lines of a single multi-line ssh
 heredoc — they execute in tests but kcov accounts for them per physical line.
 
+kcov on macOS uses an lldb-based backend that hangs when traced against bats
+(see kcov #458). CI enforces the coverage floor on `ubuntu-latest` only;
+macOS still runs `task lint test-shell` so the 81-test bats suite executes on
+both OSes.
+
 ## Swift
 
 `swift/Sources/ClipsshPasteCore/` holds the AppKit-free helpers used by
