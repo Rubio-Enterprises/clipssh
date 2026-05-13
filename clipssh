@@ -20,12 +20,25 @@ NC='\033[0m' # No Color
 # Config file (XDG-compliant)
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/clipssh"
 CONFIG_FILE="$CONFIG_DIR/config"
+STATE_FILE="$CONFIG_DIR/state"
+
+# Defaults for option globals set by parse_args. Pre-initialised at script
+# scope so parse_args is safe to call from a freshly-sourced shell (tests).
+SSH_OPTS=()
+FILE_SOURCE=""
+REMOTE_DIR_OVERRIDE=""
+PRINT_ONLY=0
+WATCH=0
+WATCH_INTERVAL=2
+HOST_FROM_CLI=""
 
 usage() {
     echo "Usage: clipssh [user@host] [options]"
     echo "       clipssh config [set|get|list]"
+    echo "       clipssh setup"
     echo ""
-    echo "Send clipboard screenshot to remote SSH host and copy path to clipboard."
+    echo "Send clipboard screenshot (or a file) to a remote SSH host and copy the"
+    echo "resulting path to your local clipboard."
     echo ""
     echo "Arguments:"
     echo "  user@host                   Remote host"
@@ -34,8 +47,17 @@ usage() {
     echo "  config set <key> <value>    Set a config value"
     echo "  config get <key>            Get a config value"
     echo "  config list                 Show all settings with sources"
+    echo "  setup                       Interactive first-run setup"
     echo ""
     echo "Options:"
+    echo "  -f, --file PATH             Upload PATH instead of reading the clipboard"
+    echo "  -r, --remote-dir DIR        Override remote upload directory"
+    echo "  -p, --port PORT             SSH port (passed through to ssh)"
+    echo "  -i, --identity FILE         SSH identity file (passed through to ssh)"
+    echo "  -o OPTION                   SSH -o option, may repeat"
+    echo "  -P, --print-only            Print remote path; do not overwrite clipboard"
+    echo "  -w, --watch                 Watch clipboard and upload new images as they appear"
+    echo "      --interval SECONDS      Poll interval for --watch (default: 2)"
     echo "  -h, --help                  Show this help"
     echo "  -v, --version               Show version"
     echo ""
@@ -47,9 +69,10 @@ usage() {
     echo "Config file: $CONFIG_FILE"
     echo ""
     echo "Example:"
-    echo "  clipssh config set host user@myserver"
-    echo "  clipssh config set remote_dir ~/.vibetunnel/control/uploads"
-    echo "  clipssh"
+    echo "  clipssh setup"
+    echo "  clipssh user@server -p 2222 -i ~/.ssh/id_ed25519"
+    echo "  clipssh -f ~/Desktop/diagram.png"
+    echo "  clipssh --watch"
 }
 
 error() {
@@ -113,7 +136,12 @@ handle_config_command() {
             ;;
         get)
             [[ -z "${2:-}" ]] && error "Usage: clipssh config get <key>"
-            config_get "$2"
+            local val; val=$(config_get "$2")
+            if [[ -z "$val" ]]; then
+                echo "(not set)" >&2
+                exit 1
+            fi
+            echo "$val"
             ;;
         list|"")
             config_list
@@ -124,6 +152,9 @@ handle_config_command() {
     esac
 }
 
+# Side effects (all globals): HOST, FILE_SOURCE, REMOTE_DIR_OVERRIDE,
+# PRINT_ONLY, WATCH, WATCH_INTERVAL, and the SSH_OPTS array. SSH_OPTS is
+# accumulated rather than overwritten so callers can pass -o repeatedly.
 parse_args() {
     while [[ $# -gt 0 ]]; do
         case $1 in
@@ -135,11 +166,50 @@ parse_args() {
                 echo "clipssh $VERSION"
                 exit 0
                 ;;
+            -p|--port)
+                [[ -z "${2:-}" ]] && error "Missing value for $1"
+                SSH_OPTS+=(-p "$2")
+                shift 2
+                ;;
+            -i|--identity)
+                [[ -z "${2:-}" ]] && error "Missing value for $1"
+                SSH_OPTS+=(-i "$2")
+                shift 2
+                ;;
+            -o)
+                [[ -z "${2:-}" ]] && error "Missing value for $1"
+                SSH_OPTS+=(-o "$2")
+                shift 2
+                ;;
+            -f|--file)
+                [[ -z "${2:-}" ]] && error "Missing value for $1"
+                FILE_SOURCE="$2"
+                shift 2
+                ;;
+            -r|--remote-dir)
+                [[ -z "${2:-}" ]] && error "Missing value for $1"
+                REMOTE_DIR_OVERRIDE="$2"
+                shift 2
+                ;;
+            -P|--print-only)
+                PRINT_ONLY=1
+                shift
+                ;;
+            -w|--watch)
+                WATCH=1
+                shift
+                ;;
+            --interval)
+                [[ -z "${2:-}" ]] && error "Missing value for --interval"
+                WATCH_INTERVAL="$2"
+                shift 2
+                ;;
             -*)
                 error "Unknown option: $1"
                 ;;
             *)
                 HOST="$1"
+                HOST_FROM_CLI="$1"
                 shift
                 ;;
         esac
@@ -180,7 +250,11 @@ extract_clipboard_image() {
             error "$(tail -1 "$STDERR_FILE")"
         fi
     else
-        if ! $PASTE_CMD > "$TEMP_FILE" 2>/dev/null; then
+        if extract_linux_file_reference; then
+            :
+        elif extract_linux_text_path; then
+            :
+        elif ! $PASTE_CMD > "$TEMP_FILE" 2>/dev/null; then
             error "No image in clipboard. Take a screenshot first"
         fi
     fi
@@ -188,6 +262,84 @@ extract_clipboard_image() {
     if [[ ! -s "$TEMP_FILE" ]]; then
         error "Clipboard image is empty"
     fi
+}
+
+# Mirrors compute_remote_filename's view of the clipboard: a synthesized
+# "source:file:<path>" line carries the basename through into the filename.
+load_from_file_source() {
+    local path="$1"
+    [[ -f "$path" ]] || error "File not found: $path"
+    [[ -r "$path" ]] || error "File not readable: $path"
+    [[ -s "$path" ]] || error "File is empty: $path"
+    cp -- "$path" "$TEMP_FILE"
+    SOURCE_LINE="source:file:$path"
+}
+
+# Linux clipboard contains a file URI (Nautilus / Dolphin / Files "Copy"). xclip
+# is the only tool that can read text/uri-list reliably across desktops; if it's
+# absent we silently fall back to other detection paths in extract_clipboard_image.
+extract_linux_file_reference() {
+    command -v xclip >/dev/null 2>&1 || return 1
+    local targets uri path
+    targets=$(xclip -selection clipboard -t TARGETS -o 2>/dev/null) || return 1
+    grep -qx 'text/uri-list' <<<"$targets" || return 1
+    uri=$(xclip -selection clipboard -t text/uri-list -o 2>/dev/null \
+        | grep -v '^#' | head -n1 | tr -d '\r')
+    [[ "$uri" == file://* ]] || return 1
+    # Strip file:// (and optional hostname) and URL-decode any %XX escapes.
+    path="${uri#file://}"
+    path="${path#localhost}"
+    path=$(printf '%b' "${path//%/\\x}")
+    is_supported_image_path "$path" || return 1
+    cp -- "$path" "$TEMP_FILE" 2>/dev/null || return 1
+    SOURCE_LINE="source:file:$path"
+    return 0
+}
+
+# Linux clipboard contains a plain text path (right-click -> Copy as Path).
+# Mirrors clipssh-paste's tryTextPath: single line, starts with / or ~, image ext.
+extract_linux_text_path() {
+    local text
+    text=$(get_linux_clipboard_text) || return 1
+    text=$(trim_whitespace "$text")
+    [[ -z "$text" ]] && return 1
+    [[ "$text" == *$'\n'* ]] && return 1
+    if [[ "$text" =~ ^[\'\"](.+)[\'\"]$ ]]; then
+        text="${BASH_REMATCH[1]}"
+    fi
+    [[ "$text" == /* || "$text" == \~* ]] || return 1
+    local expanded="${text/#\~/$HOME}"
+    is_supported_image_path "$expanded" || return 1
+    [[ -f "$expanded" ]] || return 1
+    cp -- "$expanded" "$TEMP_FILE" 2>/dev/null || return 1
+    SOURCE_LINE="source:path:$expanded"
+    return 0
+}
+
+get_linux_clipboard_text() {
+    if command -v xclip >/dev/null 2>&1; then
+        xclip -selection clipboard -o 2>/dev/null
+    elif command -v wl-paste >/dev/null 2>&1; then
+        wl-paste --type text/plain 2>/dev/null
+    else
+        return 1
+    fi
+}
+
+trim_whitespace() {
+    local s="$1"
+    s="${s#"${s%%[![:space:]]*}"}"
+    s="${s%"${s##*[![:space:]]}"}"
+    printf '%s' "$s"
+}
+
+is_supported_image_path() {
+    local p="$1" ext
+    ext="${p##*.}"
+    case "${ext,,}" in
+        png|jpg|jpeg|gif|tiff|bmp|webp) return 0 ;;
+        *) return 1 ;;
+    esac
 }
 
 # Replaces any character outside [A-Za-z0-9._-] with '_'. Applied to the
@@ -202,28 +354,52 @@ sanitize_filename() {
 compute_remote_filename() {
     local timestamp="$1" source_line="${2:-}"
     local base
-    if [[ "$OSTYPE" == "darwin"* ]]; then
-        case "$source_line" in
-            source:file:*|source:path:*)
-                local original_name="${source_line#source:*:}"
-                original_name="${original_name##*/}"
-                base="${original_name%.*}"
-                ;;
-            *)
-                base="clipboard"
-                ;;
-        esac
-    else
-        base="clipboard"
-    fi
+    case "$source_line" in
+        source:file:*|source:path:*)
+            local original_name="${source_line#source:*:}"
+            original_name="${original_name##*/}"
+            base="${original_name%.*}"
+            ;;
+        *)
+            base="clipboard"
+            ;;
+    esac
     echo "$(sanitize_filename "$base")-${timestamp}.png"
 }
 
-# Precedence: env var > config file > /tmp.
-# Note: remote_dir is user-controlled (config / env) and is intentionally
+# UTC ISO-ish stamp (20260513T142701Z). Human-readable, sorts lexically, no
+# colons that would confuse shells / scp. Falls back to epoch seconds if the
+# system `date` chokes on the format spec (unlikely outside busybox).
+make_timestamp() {
+    date -u +%Y%m%dT%H%M%SZ 2>/dev/null || date +%s
+}
+
+format_source_label() {
+    case "${1:-}" in
+        source:image) printf 'screenshot' ;;
+        source:file:*) printf 'file: %s' "${1#source:file:}" ;;
+        source:path:*) printf 'path: %s' "${1#source:path:}" ;;
+        *) printf 'clipboard' ;;
+    esac
+}
+
+# Bytes -> human string. wc -c is portable; numfmt isn't on macOS by default.
+human_size() {
+    local bytes="$1"
+    if (( bytes < 1024 )); then
+        printf '%d B' "$bytes"
+    elif (( bytes < 1024 * 1024 )); then
+        awk -v b="$bytes" 'BEGIN { printf "%.1f KB", b/1024 }'
+    else
+        awk -v b="$bytes" 'BEGIN { printf "%.1f MB", b/(1024*1024) }'
+    fi
+}
+
+# Precedence: --remote-dir flag > env var > config file > /tmp.
+# Note: remote_dir is user-controlled (config / env / flag) and is intentionally
 # evaluated on the remote shell to expand `~`. It is treated as trusted.
 resolve_remote_dir() {
-    local dir="${CLIPSSH_REMOTE_DIR:-$(config_get remote_dir)}"
+    local dir="${REMOTE_DIR_OVERRIDE:-${CLIPSSH_REMOTE_DIR:-$(config_get remote_dir)}}"
     echo "${dir:-/tmp}"
 }
 
@@ -234,8 +410,9 @@ upload_to_remote() {
     # SC2029: $remote_dir interpolates locally so the remote shell can run
     # `eval echo` and expand ~. $remote_filename is sanitized in
     # compute_remote_filename so it can't carry shell metacharacters.
+    # SSH_OPTS expands to user-supplied -p/-i/-o flags, empty by default.
     # shellcheck disable=SC2029
-    remote_path=$(ssh "$host" "
+    remote_path=$(ssh "${SSH_OPTS[@]}" "$host" "
         DIR=\$(eval echo \"$remote_dir\")
         PATH_FULL=\"\$DIR/${remote_filename}\"
         mkdir -p \"\$DIR\" && cat > \"\$PATH_FULL\" && echo \"\$PATH_FULL\"
@@ -263,33 +440,172 @@ copy_to_local_clipboard() {
     fi
 }
 
-main() {
-    if [[ "${1:-}" == "config" ]]; then
-        shift
-        handle_config_command "$@"
-        exit 0
+# Acquire one image into $TEMP_FILE / $SOURCE_LINE — from disk if --file
+# was given, otherwise from the clipboard. Returns nonzero on failure;
+# callers (the single-shot path) error out, watch mode just skips.
+acquire_image() {
+    SOURCE_LINE=""
+    : > "$TEMP_FILE"
+    : > "$STDERR_FILE"
+    if [[ -n "$FILE_SOURCE" ]]; then
+        load_from_file_source "$FILE_SOURCE"
+    else
+        extract_clipboard_image
+    fi
+}
+
+upload_and_report() {
+    local timestamp remote_filename remote_dir remote_path bytes
+    timestamp=$(make_timestamp)
+    remote_filename=$(compute_remote_filename "$timestamp" "$SOURCE_LINE")
+    remote_dir=$(resolve_remote_dir)
+    remote_path=$(upload_to_remote "$HOST" "$remote_dir" "$remote_filename" "$TEMP_FILE")
+
+    if [[ "$PRINT_ONLY" -eq 1 ]]; then
+        echo "$remote_path"
+        return 0
     fi
 
+    copy_to_local_clipboard "$remote_path"
+    bytes=$(wc -c <"$TEMP_FILE" | tr -d ' ')
+    success "Uploaded: $remote_path ($(human_size "$bytes"), $(format_source_label "$SOURCE_LINE"))"
+    echo "Path copied to clipboard - paste it directly"
+}
+
+# Polls the clipboard at $WATCH_INTERVAL seconds and uploads each new image.
+# Skips repeats by tracking the previous upload's SHA-1; ignores "no image"
+# errors so the loop keeps running while the user goes about their day.
+watch_loop() {
+    local last_hash="" interval="${WATCH_INTERVAL:-2}"
+    success "Watching clipboard on $HOST (interval ${interval}s). Ctrl-C to stop."
+    while true; do
+        if acquire_image 2>/dev/null; then
+            local hash
+            hash=$(sha1sum "$TEMP_FILE" 2>/dev/null | cut -d' ' -f1)
+            if [[ -n "$hash" && "$hash" != "$last_hash" ]]; then
+                if upload_and_report; then
+                    last_hash="$hash"
+                fi
+            fi
+        fi
+        sleep "$interval"
+    done
+}
+
+# Increments a counter of consecutive CLI-arg invocations for the same host
+# while nothing is saved in the config. After three uses we nudge the user
+# to persist it; resets if the host changes or once they save anything.
+maybe_suggest_save_host() {
+    local cli_host="$1"
+    [[ -z "$cli_host" ]] && return 0
+    [[ -n "$(config_get host)" ]] && return 0
+    mkdir -p "$CONFIG_DIR" 2>/dev/null || return 0
+    local prev_host="" prev_count=0
+    if [[ -f "$STATE_FILE" ]]; then
+        # shellcheck disable=SC1090
+        source "$STATE_FILE" 2>/dev/null || true
+    fi
+    if [[ "$prev_host" != "$cli_host" ]]; then
+        prev_count=0
+    fi
+    prev_count=$(( prev_count + 1 ))
+    printf 'prev_host=%q\nprev_count=%d\n' "$cli_host" "$prev_count" > "$STATE_FILE"
+    if (( prev_count == 3 )); then
+        echo "Tip: run 'clipssh config set host $cli_host' to skip the argument next time." >&2
+    fi
+}
+
+# Bails out gracefully if we don't have a tty (e.g. piped, non-interactive
+# CI). The wizard saves whatever the user typed, then returns so main() can
+# continue with the freshly-written config.
+run_setup_wizard() {
+    if [[ ! -t 0 || ! -t 1 ]]; then
+        error "clipssh setup requires an interactive terminal. Run: clipssh config set host user@host"
+    fi
+    success "clipssh setup"
+    echo "Press Enter to accept the [default] in brackets."
+    echo ""
+
+    local host_default; host_default=$(config_get host)
+    local host_input
+    read -r -p "Remote host (user@server) [${host_default:-required}]: " host_input
+    host_input="${host_input:-$host_default}"
+    if [[ -z "$host_input" ]]; then
+        error "Setup cancelled: a host is required."
+    fi
+    config_set host "$host_input"
+
+    local dir_default; dir_default=$(config_get remote_dir)
+    local dir_input
+    read -r -p "Remote upload directory [${dir_default:-/tmp}]: " dir_input
+    dir_input="${dir_input:-${dir_default:-/tmp}}"
+    config_set remote_dir "$dir_input"
+
+    echo ""
+    success "Saved to $CONFIG_FILE."
+    local probe
+    read -r -p "Test SSH connection to $host_input now? [Y/n] " probe
+    probe="${probe:-y}"
+    if [[ "${probe,,}" == "y" || "${probe,,}" == "yes" ]]; then
+        if ssh -o BatchMode=yes -o ConnectTimeout=5 "$host_input" true 2>/dev/null; then
+            success "SSH connection OK."
+        else
+            echo "Could not authenticate non-interactively. You may need to set up keys" >&2
+            echo "or you'll be prompted for a password each run." >&2
+        fi
+    fi
+}
+
+should_offer_setup() {
+    [[ -z "${HOST:-}" ]] || return 1
+    [[ -z "${CLIPSSH_HOST:-}" ]] || return 1
+    [[ -z "$(config_get host)" ]] || return 1
+    [[ -t 0 && -t 1 ]] || return 1
+    return 0
+}
+
+main() {
+    case "${1:-}" in
+        config)
+            shift
+            handle_config_command "$@"
+            exit 0
+            ;;
+        setup)
+            run_setup_wizard
+            exit 0
+            ;;
+    esac
+
     parse_args "$@"
+
+    if should_offer_setup; then
+        echo "No host configured. Running first-time setup."
+        echo "(Tip: 'clipssh setup' rerunnable any time; Ctrl-C to skip.)"
+        echo ""
+        run_setup_wizard
+        echo ""
+    fi
+
     resolve_host
-    detect_clipboard_tool
+    maybe_suggest_save_host "${HOST_FROM_CLI:-}"
+    # --file bypasses clipboard read entirely. --print-only still needs the
+    # read side; only the write side (copy_to_local_clipboard) is skipped.
+    if [[ -z "$FILE_SOURCE" ]]; then
+        detect_clipboard_tool
+    fi
 
     TEMP_FILE=$(mktemp).png
     STDERR_FILE=$(mktemp)
     trap 'rm -f "$TEMP_FILE" "$STDERR_FILE"' EXIT
 
-    SOURCE_LINE=""
-    extract_clipboard_image
+    if [[ "$WATCH" -eq 1 ]]; then
+        watch_loop
+        exit 0
+    fi
 
-    local timestamp; timestamp=$(date +%s)
-    local remote_filename; remote_filename=$(compute_remote_filename "$timestamp" "$SOURCE_LINE")
-    local remote_dir; remote_dir=$(resolve_remote_dir)
-
-    local remote_path; remote_path=$(upload_to_remote "$HOST" "$remote_dir" "$remote_filename" "$TEMP_FILE")
-
-    copy_to_local_clipboard "$remote_path"
-    success "Uploaded: $remote_path"
-    echo "Path copied to clipboard - paste it directly"
+    acquire_image
+    upload_and_report
 }
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then

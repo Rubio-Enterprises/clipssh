@@ -87,6 +87,71 @@ teardown() {
     assert_equal "$HOST" "second@host"
 }
 
+@test "parse_args: -p / --port accumulates into SSH_OPTS" {
+    SSH_OPTS=()
+    parse_args -p 2222 user@host
+    assert_equal "${SSH_OPTS[0]}" "-p"
+    assert_equal "${SSH_OPTS[1]}" "2222"
+    assert_equal "$HOST" "user@host"
+}
+
+@test "parse_args: -i / --identity accumulates into SSH_OPTS" {
+    SSH_OPTS=()
+    parse_args -i /tmp/key user@host
+    assert_equal "${SSH_OPTS[0]}" "-i"
+    assert_equal "${SSH_OPTS[1]}" "/tmp/key"
+}
+
+@test "parse_args: -o options can be repeated" {
+    SSH_OPTS=()
+    parse_args -o StrictHostKeyChecking=no -o ConnectTimeout=5
+    assert_equal "${#SSH_OPTS[@]}" "4"
+    assert_equal "${SSH_OPTS[1]}" "StrictHostKeyChecking=no"
+    assert_equal "${SSH_OPTS[3]}" "ConnectTimeout=5"
+}
+
+@test "parse_args: -p without a value errors" {
+    run -1 parse_args -p
+    assert_output --partial "Missing value for -p"
+}
+
+@test "parse_args: -f / --file sets FILE_SOURCE" {
+    FILE_SOURCE=""
+    parse_args -f /tmp/photo.png user@host
+    assert_equal "$FILE_SOURCE" "/tmp/photo.png"
+    assert_equal "$HOST" "user@host"
+}
+
+@test "parse_args: -r / --remote-dir sets REMOTE_DIR_OVERRIDE" {
+    REMOTE_DIR_OVERRIDE=""
+    parse_args --remote-dir /var/uploads user@host
+    assert_equal "$REMOTE_DIR_OVERRIDE" "/var/uploads"
+}
+
+@test "parse_args: -P / --print-only sets PRINT_ONLY=1" {
+    PRINT_ONLY=0
+    parse_args --print-only user@host
+    assert_equal "$PRINT_ONLY" "1"
+}
+
+@test "parse_args: -w / --watch sets WATCH=1" {
+    WATCH=0
+    parse_args -w user@host
+    assert_equal "$WATCH" "1"
+}
+
+@test "parse_args: --interval sets WATCH_INTERVAL" {
+    WATCH_INTERVAL=2
+    parse_args --interval 7 user@host
+    assert_equal "$WATCH_INTERVAL" "7"
+}
+
+@test "parse_args: HOST_FROM_CLI tracks the positional host" {
+    HOST_FROM_CLI=""
+    parse_args cli@host
+    assert_equal "$HOST_FROM_CLI" "cli@host"
+}
+
 # --- resolve_host -----------------------------------------------------------
 
 @test "resolve_host: prefers an already-set HOST (CLI arg) over env and config" {
@@ -157,8 +222,14 @@ teardown() {
 
 # --- compute_remote_filename ------------------------------------------------
 
-@test "compute_remote_filename: returns generic name on linux" {
-    run compute_remote_filename 1700000000 "source:file:/x.png"
+@test "compute_remote_filename: uses file basename for source:file: on linux" {
+    run compute_remote_filename 1700000000 "source:file:/home/me/diagram.png"
+    assert_success
+    assert_output "diagram-1700000000.png"
+}
+
+@test "compute_remote_filename: falls back to 'clipboard' on linux when source is unknown" {
+    run compute_remote_filename 1700000000 ""
     assert_success
     assert_output "clipboard-1700000000.png"
 }
@@ -246,6 +317,107 @@ teardown() {
     CLIPSSH_REMOTE_DIR=/env/dir run resolve_remote_dir
     assert_success
     assert_output "/env/dir"
+}
+
+@test "resolve_remote_dir: --remote-dir override beats env and config" {
+    config_set remote_dir /from/config
+    REMOTE_DIR_OVERRIDE=/from/flag CLIPSSH_REMOTE_DIR=/from/env \
+        run resolve_remote_dir
+    assert_success
+    assert_output "/from/flag"
+}
+
+# --- make_timestamp ---------------------------------------------------------
+
+@test "make_timestamp: produces a sortable UTC stamp" {
+    run make_timestamp
+    assert_success
+    # 20260513T142701Z or 8-digit-T6-digit-Z, or fallback to digits-only epoch.
+    [[ "$output" =~ ^[0-9]+(T[0-9]+Z)?$ ]]
+}
+
+# --- format_source_label ----------------------------------------------------
+
+@test "format_source_label: image -> 'screenshot'" {
+    run format_source_label "source:image"
+    assert_output "screenshot"
+}
+
+@test "format_source_label: file -> 'file: <path>'" {
+    run format_source_label "source:file:/tmp/x.png"
+    assert_output "file: /tmp/x.png"
+}
+
+@test "format_source_label: path -> 'path: <path>'" {
+    run format_source_label "source:path:/home/x.png"
+    assert_output "path: /home/x.png"
+}
+
+@test "format_source_label: empty -> 'clipboard'" {
+    run format_source_label ""
+    assert_output "clipboard"
+}
+
+# --- human_size -------------------------------------------------------------
+
+@test "human_size: bytes under 1 KB stay in bytes" {
+    run human_size 512
+    assert_output "512 B"
+}
+
+@test "human_size: medium values format as KB" {
+    run human_size 4096
+    assert_output "4.0 KB"
+}
+
+@test "human_size: large values format as MB" {
+    run human_size 1572864
+    assert_output "1.5 MB"
+}
+
+# --- is_supported_image_path ------------------------------------------------
+
+@test "is_supported_image_path: accepts common image extensions case-insensitively" {
+    run is_supported_image_path /tmp/x.PNG
+    assert_success
+    run is_supported_image_path /tmp/x.jpeg
+    assert_success
+    run is_supported_image_path /tmp/x.webp
+    assert_success
+}
+
+@test "is_supported_image_path: rejects non-images" {
+    run is_supported_image_path /tmp/notes.txt
+    assert_failure
+    run is_supported_image_path /tmp/noext
+    assert_failure
+}
+
+# --- load_from_file_source --------------------------------------------------
+
+@test "load_from_file_source: copies the file into TEMP_FILE and sets SOURCE_LINE" {
+    TEMP_FILE="$TEST_TMP/dest.png"
+    : > "$TEMP_FILE"
+    local src="$TEST_TMP/photo.png"
+    printf 'pretend-png' > "$src"
+    SOURCE_LINE=""
+    load_from_file_source "$src"
+    assert_equal "$(<"$TEMP_FILE")" "pretend-png"
+    assert_equal "$SOURCE_LINE" "source:file:$src"
+}
+
+@test "load_from_file_source: errors when file is missing" {
+    TEMP_FILE="$TEST_TMP/dest.png"
+    run -1 load_from_file_source "$TEST_TMP/does-not-exist.png"
+    assert_output --partial "File not found"
+}
+
+@test "load_from_file_source: errors when file is empty" {
+    TEMP_FILE="$TEST_TMP/dest.png"
+    local src="$TEST_TMP/empty.png"
+    : > "$src"
+    run -1 load_from_file_source "$src"
+    assert_output --partial "File is empty"
 }
 
 # --- copy_to_local_clipboard ------------------------------------------------

@@ -68,6 +68,11 @@ teardown() {
     assert_output --partial "Usage: clipssh config get <key>"
 }
 
+@test "CLI: config get on an unset key prints '(not set)' and exits 1" {
+    run -1 "$CLIPSSH_BIN" config get host
+    assert_output --partial "(not set)"
+}
+
 @test "CLI: config list shows defaults when nothing is set" {
     run -0 "$CLIPSSH_BIN" config list
     assert_output --partial "remote_dir   = /tmp"
@@ -219,4 +224,121 @@ EOF
 
     run -1 "$CLIPSSH_BIN"
     assert_output --partial "No clipboard tool found"
+}
+
+# --- ssh option passthrough -------------------------------------------------
+
+@test "CLI: -p / -i / -o flags are forwarded to ssh as separate argv slots" {
+    install_xclip_with_recorder
+    install_mock ssh "$(cat <<'EOF'
+# Record each argv slot on its own line so we can assert positional layout.
+printf '%s\n' "$@" > "$TEST_TMP/ssh.argv"
+cat > /dev/null
+echo "/tmp/remote.png"
+EOF
+)"
+    "$CLIPSSH_BIN" config set host target@remote
+
+    run -0 "$CLIPSSH_BIN" -p 2222 -i /tmp/key -o StrictHostKeyChecking=no
+    assert_file_contains "$TEST_TMP/ssh.argv" "^-p$"
+    assert_file_contains "$TEST_TMP/ssh.argv" "^2222$"
+    assert_file_contains "$TEST_TMP/ssh.argv" "^-i$"
+    assert_file_contains "$TEST_TMP/ssh.argv" "^/tmp/key$"
+    assert_file_contains "$TEST_TMP/ssh.argv" "^StrictHostKeyChecking=no$"
+    assert_file_contains "$TEST_TMP/ssh.argv" "^target@remote$"
+}
+
+# --- --file source ---------------------------------------------------------
+
+@test "CLI: --file uploads the named file instead of reading the clipboard" {
+    install_ssh_recorder
+    printf 'png-from-disk' > "$TEST_TMP/diagram.png"
+    "$CLIPSSH_BIN" config set host target@remote
+
+    run -0 "$CLIPSSH_BIN" --file "$TEST_TMP/diagram.png"
+    assert_output --partial "Uploaded:"
+    # Filename is derived from the basename of the source.
+    assert_output --partial "diagram-"
+    assert_file_contains "$TEST_TMP/ssh.stdin" "^png-from-disk$"
+}
+
+@test "CLI: --file errors clearly when the path does not exist" {
+    install_ssh_recorder
+    "$CLIPSSH_BIN" config set host target@remote
+
+    run -1 "$CLIPSSH_BIN" --file /tmp/no-such-file-1234567890.png
+    assert_output --partial "File not found"
+}
+
+# --- --remote-dir flag -----------------------------------------------------
+
+@test "CLI: --remote-dir overrides the configured remote directory" {
+    install_xclip_with_recorder
+    install_ssh_recorder
+    "$CLIPSSH_BIN" config set host target@remote
+    "$CLIPSSH_BIN" config set remote_dir /from/config
+
+    run -0 "$CLIPSSH_BIN" -r /from/flag
+    assert_file_contains "$TEST_TMP/ssh.script" "/from/flag"
+    refute [ -n "$(grep '/from/config' "$TEST_TMP/ssh.script" 2>/dev/null)" ]
+}
+
+# --- --print-only ----------------------------------------------------------
+
+@test "CLI: --print-only writes path to stdout and does not touch the clipboard" {
+    install_xclip_with_recorder
+    install_ssh_recorder
+    "$CLIPSSH_BIN" config set host target@remote
+
+    run -0 "$CLIPSSH_BIN" --print-only
+    # Path goes to stdout, by itself, no "Uploaded:" banner.
+    [[ "$output" == /tmp/clipboard-* ]]
+    refute_output --partial "Path copied"
+    # And no xclip.copy file was produced.
+    assert_file_not_exists "$TEST_TMP/xclip.copy"
+}
+
+# --- enriched success line -------------------------------------------------
+
+@test "CLI: success line reports size and detected source" {
+    install_xclip_with_recorder
+    install_ssh_recorder
+    "$CLIPSSH_BIN" config set host target@remote
+
+    run -0 "$CLIPSSH_BIN"
+    assert_output --partial "Uploaded:"
+    # 14 bytes of "fake-png-bytes" -> "14 B".
+    assert_output --partial "14 B"
+    assert_output --partial "clipboard"
+}
+
+# --- suggest-save host -----------------------------------------------------
+
+@test "CLI: nudges the user to save the host after the third CLI-arg use" {
+    install_xclip_with_recorder
+    install_ssh_recorder
+
+    "$CLIPSSH_BIN" repeat@host >/dev/null
+    "$CLIPSSH_BIN" repeat@host >/dev/null
+    run -0 "$CLIPSSH_BIN" repeat@host
+    assert_output --partial "Tip:"
+    assert_output --partial "config set host repeat@host"
+}
+
+@test "CLI: nudge resets when the CLI host changes" {
+    install_xclip_with_recorder
+    install_ssh_recorder
+
+    "$CLIPSSH_BIN" first@host >/dev/null
+    "$CLIPSSH_BIN" first@host >/dev/null
+    run -0 "$CLIPSSH_BIN" different@host
+    refute_output --partial "Tip:"
+}
+
+# --- setup wizard ----------------------------------------------------------
+
+@test "CLI: 'setup' refuses to run without a TTY (no interactive input piped)" {
+    # No stdin/stdout TTY in bats; this exercises the guard.
+    run -1 "$CLIPSSH_BIN" setup < /dev/null
+    assert_output --partial "interactive terminal"
 }
