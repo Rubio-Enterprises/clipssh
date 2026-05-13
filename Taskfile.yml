@@ -53,7 +53,11 @@ tasks:
     cmds:
       - rm -rf coverage
       - mkdir -p coverage
-      - kcov --include-path={{.TASKFILE_DIR}}/clipssh coverage bats tests/unit tests/integration
+      # --bash-method=PS4 avoids the DEBUG-trap collision with bats's own
+      # tracer (bats-core/tracing.bash installs `trap … DEBUG`). The default
+      # DEBUG method works on Linux but enters an infinite loop on macOS
+      # (kcov issue #458) when bats is the binary under coverage.
+      - kcov --bash-method=PS4 --include-path={{.TASKFILE_DIR}}/clipssh coverage bats tests/unit tests/integration
       - jq -r '.files[] | "\(.percent_covered)%  \(.file)"' {{.COVERAGE_JSON}}
 
   check-coverage:
