@@ -508,18 +508,36 @@ watch_hash() {
 watch_loop() {
     local last_hash="" interval="${WATCH_INTERVAL:-2}"
     success "Watching clipboard on $HOST (interval ${interval}s). Ctrl-C to stop."
+    local _dbg="${CLIPSSH_DEBUG_LOG:-}"
+    [[ -n "$_dbg" ]] && echo "watch_loop: enter (interval=$interval, OSTYPE=$OSTYPE, PASTE_CMD=$PASTE_CMD)" >> "$_dbg"
     while true; do
         : > "$HASH_FILE"
+        [[ -n "$_dbg" ]] && echo "iter: start" >> "$_dbg"
         (
             # Suppress acquire's stderr — "No image in clipboard" is the
             # routine case when the clipboard holds text. Upload errors are
             # left visible so real failures don't disappear.
-            acquire_image 2>/dev/null
-            [[ -s "$TEMP_FILE" ]] || exit 0
+            if [[ -n "$_dbg" ]]; then
+                acquire_image 2>>"$_dbg"
+                local _ai_rc=$?
+                echo "iter: acquire_image rc=$_ai_rc temp_size=$(wc -c <"$TEMP_FILE" 2>/dev/null | tr -d ' ')" >> "$_dbg"
+            else
+                acquire_image 2>/dev/null
+            fi
+            [[ -s "$TEMP_FILE" ]] || { [[ -n "$_dbg" ]] && echo "iter: empty TEMP_FILE, skip" >> "$_dbg"; exit 0; }
             local hash; hash=$(watch_hash "$TEMP_FILE")
-            [[ -n "$hash" && "$hash" != "$last_hash" ]] || exit 0
+            [[ -n "$_dbg" ]] && echo "iter: hash=$hash last_hash=$last_hash" >> "$_dbg"
+            [[ -n "$hash" && "$hash" != "$last_hash" ]] || { [[ -n "$_dbg" ]] && echo "iter: dedupe skip" >> "$_dbg"; exit 0; }
             printf '%s' "$hash" > "$HASH_FILE"
-            upload_and_report
+            [[ -n "$_dbg" ]] && echo "iter: about to upload_and_report" >> "$_dbg"
+            if [[ -n "$_dbg" ]]; then
+                upload_and_report 2>>"$_dbg"
+                local _ur_rc=$?
+                echo "iter: upload_and_report rc=$_ur_rc" >> "$_dbg"
+                exit $_ur_rc
+            else
+                upload_and_report
+            fi
         ) || true
         if [[ -s "$HASH_FILE" ]]; then
             last_hash=$(<"$HASH_FILE")

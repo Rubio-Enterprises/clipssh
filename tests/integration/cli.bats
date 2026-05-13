@@ -400,14 +400,32 @@ EOF
     install_counting_ssh
     "$CLIPSSH_BIN" config set host target@remote
 
+    export CLIPSSH_DEBUG_LOG="$TEST_TMP/watch.debug"
     printf 'image-A' > "$TEST_TMP/clipboard.state"
-    "$CLIPSSH_BIN" --watch --interval 0.1 >/dev/null 2>&1 &
+    "$CLIPSSH_BIN" --watch --interval 0.1 >"$TEST_TMP/watch.stdout" 2>"$TEST_TMP/watch.stderr" &
     WATCH_PID=$!
     sleep 1.0  # Many polls of image-A — only the first should upload.
     printf 'image-B' > "$TEST_TMP/clipboard.state"
     sleep 1.0  # Many polls of image-B — only the first should upload.
     kill "$WATCH_PID" 2>/dev/null || true
     wait "$WATCH_PID" 2>/dev/null || true
+
+    # Debug dump on failure
+    if [[ ! -f "$TEST_TMP/ssh.stdin.1" ]]; then
+        echo "--- watch.debug ---" >&3
+        cat "$TEST_TMP/watch.debug" >&3 2>/dev/null || echo "(no debug file)" >&3
+        echo "--- watch.stdout ---" >&3
+        cat "$TEST_TMP/watch.stdout" >&3 2>/dev/null
+        echo "--- watch.stderr ---" >&3
+        cat "$TEST_TMP/watch.stderr" >&3 2>/dev/null
+        echo "--- clipboard.state ---" >&3
+        cat "$TEST_TMP/clipboard.state" >&3 2>/dev/null
+        echo "--- ls TEST_TMP ---" >&3
+        ls -la "$TEST_TMP" >&3 2>/dev/null
+        echo "--- OSTYPE in test = $OSTYPE ---" >&3
+        echo "--- bash --version ---" >&3
+        bash --version >&3 2>&1
+    fi
 
     # Two uploads, in order, no third.
     assert_file_exists "$TEST_TMP/ssh.stdin.1"
