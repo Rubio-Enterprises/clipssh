@@ -43,15 +43,17 @@ install_linux() {
         log "Building kcov from source (not packaged on Ubuntu 24.04)"
         sudo apt-get install -y --no-install-recommends \
             cmake binutils-dev zlib1g-dev libdw-dev g++ ca-certificates curl
-        local tmp
-        tmp=$(mktemp -d)
-        # EXIT (not RETURN) so cleanup runs even if a build step aborts under set -e.
-        trap 'rm -rf "$tmp"' EXIT
+        # Use a script-scope variable so the EXIT trap can still see it after
+        # install_linux returns (set -u would otherwise blow up on a function
+        # local that's gone out of scope). EXIT (not RETURN) so cleanup runs
+        # even if a build step aborts under set -e.
+        KCOV_BUILD_TMP=$(mktemp -d)
+        trap 'rm -rf "${KCOV_BUILD_TMP:-}"' EXIT
         curl -fsSL https://github.com/SimonKagstrom/kcov/archive/v42.tar.gz \
-            | tar xz -C "$tmp"
-        cmake -S "$tmp/kcov-42" -B "$tmp/kcov-42/build" > /dev/null
-        make -C "$tmp/kcov-42/build" -j"$(nproc)" > /dev/null
-        sudo make -C "$tmp/kcov-42/build" install > /dev/null
+            | tar xz -C "$KCOV_BUILD_TMP"
+        cmake -S "$KCOV_BUILD_TMP/kcov-42" -B "$KCOV_BUILD_TMP/kcov-42/build" > /dev/null
+        make -C "$KCOV_BUILD_TMP/kcov-42/build" -j"$(nproc)" > /dev/null
+        sudo make -C "$KCOV_BUILD_TMP/kcov-42/build" install > /dev/null
     fi
 }
 
