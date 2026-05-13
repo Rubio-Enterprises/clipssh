@@ -44,9 +44,8 @@ tasks:
 
   test-swift:
     desc: Run the Swift unit tests (macOS only)
-    dir: swift
     cmds:
-      - task: test
+      - task: swift:test
 
   test-coverage:
     desc: Run shell tests under kcov and print summary

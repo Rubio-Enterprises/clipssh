@@ -55,6 +55,24 @@ install_linux() {
     fi
 }
 
+install_bats_lib() {
+    # bats-support / bats-assert / bats-file aren't on Homebrew. Pin each
+    # to a tagged release and check it out into $(brew --prefix)/lib so
+    # load_bats_libs (which already searches /usr/local/lib and
+    # /opt/homebrew/lib) discovers them.
+    local repo="$1" tag="$2" prefix
+    prefix="$(brew --prefix)/lib"
+    local dest="$prefix/$repo"
+    if [ -d "$dest/.git" ]; then
+        git -C "$dest" fetch --quiet --depth=1 origin "refs/tags/$tag"
+        git -C "$dest" reset --quiet --hard FETCH_HEAD
+    else
+        mkdir -p "$prefix"
+        git clone --quiet --depth=1 --branch "$tag" \
+            "https://github.com/bats-core/$repo.git" "$dest"
+    fi
+}
+
 install_macos() {
     if ! have brew; then
         echo "Homebrew is required. Install from https://brew.sh." >&2
@@ -64,12 +82,14 @@ install_macos() {
     brew install --quiet \
         go-task \
         bats-core \
-        bats-assert \
-        bats-file \
-        bats-support \
         shellcheck \
         jq \
         kcov
+
+    log "Installing bats helper libraries from source"
+    install_bats_lib bats-support v0.3.0
+    install_bats_lib bats-assert  v2.1.0
+    install_bats_lib bats-file    v0.4.0
 }
 
 case "$(uname -s)" in
